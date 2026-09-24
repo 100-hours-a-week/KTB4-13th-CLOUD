@@ -1,0 +1,138 @@
+name: Production CD
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 검증할 Release tag
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: production-cd
+  cancel-in-progress: false
+
+jobs:
+  verify-release:
+    name: Verify release manifest
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      release: ${{ steps.release.outputs.release }}
+      frontend_sha: ${{ steps.release.outputs.frontend_sha }}
+      backend_sha: ${{ steps.release.outputs.backend_sha }}
+      ai_sha: ${{ steps.release.outputs.ai_sha }}
+    steps:
+      - name: Check out Cloud repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Resolve release tag
+        id: tag
+        env:
+          MANUAL_TAG: ${{ inputs.release_tag }}
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            release_tag="$MANUAL_TAG"
+          else
+            release_tag="$GITHUB_REF_NAME"
+          fi
+          echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Verify release manifest
+        id: release
+        run: |
+          values=$(bash scripts/verify-release.sh \
+            "releases/${{ steps.tag.outputs.release_tag }}.yml" \
+            "${{ steps.tag.outputs.release_tag }}")
+          while IFS='=' read -r key value; do
+            echo "$key=$value" >> "$GITHUB_OUTPUT"
+          done <<< "$values"
+
+  deploy:
+    name: Deploy release
+    needs: verify-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: production
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_CD_ROLE_ARN: ${{ vars.AWS_CD_ROLE_ARN }}
+      BACKEND_INSTANCE_ID: i-02549e178513b10b4
+      AI_INSTANCE_ID: i-062ff04c0548849bd
+      FRONTEND_BUCKET: bookjeok-fe
+      CLOUDFRONT_DISTRIBUTION_ID: E18E0FGBK8ZS49
+
+    steps:
+      - name: Check out Cloud repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Check out Backend
+        uses: actions/checkout@v4
+        with:
+          repository: 100-hours-a-week/KTB4-13th-BE
+          ref: ${{ needs.verify-release.outputs.backend_sha }}
+          path: services/backend
+          persist-credentials: false
+
+      - name: Check out AI
+        uses: actions/checkout@v4
+        with:
+          repository: 100-hours-a-week/KTB4-13th-AI
+          ref: ${{ needs.verify-release.outputs.ai_sha }}
+          path: services/ai
+          persist-credentials: false
+
+      - name: Check out Frontend
+        uses: actions/checkout@v4
+        with:
+          repository: 100-hours-a-week/KTB4-13th-FE
+          ref: ${{ needs.verify-release.outputs.frontend_sha }}
+          path: services/frontend
+          persist-credentials: false
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_CD_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Resolve image digests
+        id: images
+        run: |
+          backend_digest=$(aws ecr describe-images --repository-name bookjeok-be --image-ids "imageTag=${{ needs.verify-release.outputs.backend_sha }}" --query 'imageDetails[0].imageDigest' --output text)
+          ai_digest=$(aws ecr describe-images --repository-name bookjeok-ai --image-ids "imageTag=${{ needs.verify-release.outputs.ai_sha }}" --query 'imageDetails[0].imageDigest' --output text)
+          [[ "$backend_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$ai_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          registry="522688057030.dkr.ecr.${AWS_REGION}.amazonaws.com"
+          echo "backend_image=$registry/bookjeok-be@$backend_digest" >> "$GITHUB_OUTPUT"
+          echo "ai_image=$registry/bookjeok-ai@$ai_digest" >> "$GITHUB_OUTPUT"
+
+      - name: Build Frontend release
+        working-directory: services/frontend
+        run: |
+          npm ci
+          npm run lint
+          npm run build -- --base="/releases/${{ needs.verify-release.outputs.frontend_sha }}/"
+
+      - name: Deploy AI
+        run: |
+          bash scripts/send-ssm.sh "$AI_INSTANCE_ID" scripts/deploy_ai.sh /opt/bookjeok-ai docker-compose.yml ai-server "${{ steps.images.outputs.ai_image }}" "${{ needs.verify-release.outputs.ai_sha }}" "$AWS_REGION" "522688057030.dkr.ecr.${AWS_REGION}.amazonaws.com" http://10.0.1.56:8000/health
+
+      - name: Deploy Backend
+        run: |
+          bash scripts/send-ssm.sh "$BACKEND_INSTANCE_ID" scripts/deploy_backend.sh /opt/bookjeok docker-compose.yml app "${{ steps.images.outputs.backend_image }}" "${{ needs.verify-release.outputs.backend_sha }}" "$AWS_REGION" "522688057030.dkr.ecr.${AWS_REGION}.amazonaws.com" http://127.0.0.1:8080/api/v1/categories
+
+      - name: Deploy Frontend
+        run: |
+          bash scripts/deploy_frontend.sh services/frontend/dist "${{ needs.verify-release.outputs.frontend_sha }}" "$FRONTEND_BUCKET" "$CLOUDFRONT_DISTRIBUTION_ID"
