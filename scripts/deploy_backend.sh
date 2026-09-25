@@ -21,7 +21,7 @@ current_file="$deploy_dir/current-backend-release.env"
 previous_file="$deploy_dir/previous-backend-release.env"
 candidate_file="$deploy_dir/candidate-backend-release.env"
 
-for command in docker curl grep sed tail cp mv sleep flock stat; do
+for command in aws docker curl grep sed tail cp mv sleep flock stat; do
   command -v "$command" >/dev/null 2>&1 || {
     echo "필수 명령을 찾을 수 없습니다: $command" >&2
     exit 1
@@ -29,6 +29,10 @@ for command in docker curl grep sed tail cp mv sleep flock stat; do
 done
 
 cd "$deploy_dir"
+echo "ECR에 Docker 로그인합니다."
+aws ecr get-login-password --region "$aws_region" \
+  | docker login --username AWS --password-stdin "$ecr_registry" >/dev/null
+
 owner=$(stat -c '%u' .)
 mode=$(stat -c '%a' .)
 if [ "$owner" -ne 0 ] || (( (8#$mode & 8#022) != 0 )); then
