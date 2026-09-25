@@ -29,7 +29,7 @@ fi
 
 command -v aws >/dev/null 2>&1 || { echo "aws 명령을 찾을 수 없습니다." >&2; exit 1; }
 
-release_prefix="s3://${s3_bucket}/releases/${frontend_sha}/"
+release_prefix="s3://${s3_bucket}/releases/${frontend_sha}"
 
 aws s3 sync "$dist_dir/" "$release_prefix" \
   --delete \
