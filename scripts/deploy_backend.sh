@@ -68,6 +68,26 @@ run_compose() {
     docker compose --env-file "$env_file" -f "$compose_file" "$@"
 }
 
+cleanup_unused_docker_storage() {
+  local repository=$1
+  local keep_current=${2:-}
+  local keep_previous=${3:-}
+  local current_id previous_id image_id
+
+  echo "사용하지 않는 Docker 이미지와 중지된 컨테이너를 정리합니다."
+  docker container prune --force >/dev/null || true
+  docker image prune --force >/dev/null || true
+
+  current_id=$(docker image inspect -q "$keep_current" 2>/dev/null || true)
+  previous_id=$(docker image inspect -q "$keep_previous" 2>/dev/null || true)
+  while read -r image_id; do
+    [ -n "$image_id" ] || continue
+    [ "$image_id" = "$current_id" ] && continue
+    [ "$image_id" = "$previous_id" ] && continue
+    docker image rm "$image_id" >/dev/null 2>&1 || true
+  done < <(docker image ls -q "$repository" | sort -u)
+}
+
 rollback() {
   if read_release "$previous_file"; then
     echo "이전 Backend 이미지로 Rollback합니다." >&2
@@ -78,6 +98,11 @@ rollback() {
 
 trap 'rm -f -- "$candidate_file"' EXIT
 
+previous_image=""
+if read_release "$previous_file"; then
+  previous_image="$release_image"
+fi
+cleanup_unused_docker_storage "${image_uri%@*}" "" "$previous_image"
 run_compose "$image_uri" "$release_sha" pull "$service_name"
 run_compose "$image_uri" "$release_sha" up -d --no-deps "$service_name"
 
@@ -97,4 +122,5 @@ if [ "$ready" -ne 1 ]; then
 fi
 
 mv "$candidate_file" "$current_file"
+cleanup_unused_docker_storage "${image_uri%@*}" "$image_uri" "$previous_image"
 echo "Backend 배포가 완료되었습니다: $release_sha"
