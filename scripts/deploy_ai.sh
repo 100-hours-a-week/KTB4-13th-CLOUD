@@ -30,6 +30,10 @@ done
 
 cd "$deploy_dir"
 
+echo "ECR에 Docker 로그인합니다."
+aws ecr get-login-password --region "$aws_region" \
+  | docker login --username AWS --password-stdin "$ecr_registry" >/dev/null
+
 owner=$(stat -c '%u' .)
 mode=$(stat -c '%a' .)
 if [ "$owner" -ne 0 ] || (( (8#$mode & 8#022) != 0 )); then
