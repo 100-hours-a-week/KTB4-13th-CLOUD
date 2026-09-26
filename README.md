@@ -11,6 +11,8 @@
 3. CD가 Manifest와 ECR 이미지를 검증합니다.
 4. `production` Environment 승인 후 AI → Backend → Frontend 순서로 배포합니다.
 
-실제 운영 배포 Workflow와 스크립트는 인프라·서비스별 Compose 구조를 확인한 뒤 추가합니다.
+운영 배포 Workflow와 스크립트는 `.github/workflows/`와 `scripts/`에서 관리합니다.
+
+기여 방법은 [CONTRIBUTING.md](CONTRIBUTING.md)를 참고합니다.
 
 Release Manifest는 `scripts/verify-release.sh`로 Git tag와 버전 값을 검증합니다.
