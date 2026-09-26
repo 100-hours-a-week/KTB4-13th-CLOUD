@@ -136,3 +136,43 @@ jobs:
       - name: Deploy Frontend
         run: |
           bash scripts/deploy_frontend.sh services/frontend/dist "${{ needs.verify-release.outputs.frontend_sha }}" "$FRONTEND_BUCKET" "$CLOUDFRONT_DISTRIBUTION_ID"
+
+  notify-failure:
+    name: Notify deployment failure
+    needs: [verify-release, deploy]
+    if: ${{ always() && (needs.verify-release.result == 'failure' || needs.deploy.result == 'failure') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send Discord alert
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          RELEASE_TAG: ${{ needs.verify-release.outputs.release }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -z "$DISCORD_WEBHOOK_URL" ]; then
+            echo 'DISCORD_WEBHOOK_URL secret is not configured; skipping external alert.'
+            exit 0
+          fi
+          payload=$(jq -n --arg content "🚨 Production CD 실패\n저장소: $GITHUB_REPOSITORY\nRelease: ${RELEASE_TAG:-확인 필요}\n로그: $RUN_URL" '{content: $content}')
+          curl --fail-with-body --silent --show-error \
+            -H 'Content-Type: application/json' --data "$payload" "$DISCORD_WEBHOOK_URL"
+
+  notify-success:
+    name: Notify deployment success
+    needs: [verify-release, deploy]
+    if: ${{ needs.verify-release.result == 'success' && needs.deploy.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send Discord notification
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          RELEASE_TAG: ${{ needs.verify-release.outputs.release }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -z "$DISCORD_WEBHOOK_URL" ]; then
+            echo 'DISCORD_WEBHOOK_URL secret is not configured; skipping external notification.'
+            exit 0
+          fi
+          payload=$(jq -n --arg content "✅ Production CD 완료\n저장소: $GITHUB_REPOSITORY\nRelease: ${RELEASE_TAG:-확인 필요}\n로그: $RUN_URL" '{content: $content}')
+          curl --fail-with-body --silent --show-error \
+            -H 'Content-Type: application/json' --data "$payload" "$DISCORD_WEBHOOK_URL"
