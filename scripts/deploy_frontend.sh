@@ -31,16 +31,31 @@ command -v aws >/dev/null 2>&1 || { echo "aws 명령을 찾을 수 없습니다.
 
 release_prefix="s3://${s3_bucket}/releases/${frontend_sha}"
 
-aws s3 sync "$dist_dir/" "$release_prefix" \
+echo "Frontend Release 업로드를 시작합니다: $release_prefix"
+if ! aws s3 sync "$dist_dir/" "$release_prefix" \
   --delete \
-  --cache-control 'public,max-age=31536000,immutable'
+  --cache-control 'public,max-age=31536000,immutable'; then
+  echo "Frontend 배포 실패: S3 Release 업로드 단계" >&2
+  exit 1
+fi
 
-aws s3 cp "$release_prefix/index.html" "s3://${s3_bucket}/index.html" \
+echo "Frontend 진입점 전환을 시작합니다: s3://${s3_bucket}/index.html"
+if ! aws s3 cp "$release_prefix/index.html" "s3://${s3_bucket}/index.html" \
   --cache-control 'no-cache,no-store,must-revalidate' \
-  --content-type 'text/html; charset=utf-8'
+  --content-type 'text/html; charset=utf-8'; then
+  echo "Frontend 배포 실패: index.html 전환 단계" >&2
+  exit 1
+fi
 
-aws cloudfront create-invalidation \
+echo "CloudFront 캐시 무효화를 시작합니다: $distribution_id"
+if ! invalidation_id=$(aws cloudfront create-invalidation \
   --distribution-id "$distribution_id" \
-  --paths '/*' >/dev/null
+  --paths '/*' \
+  --query 'Invalidation.Id' \
+  --output text); then
+  echo "Frontend 배포 실패: CloudFront 캐시 무효화 단계" >&2
+  exit 1
+fi
 
+echo "CloudFront 캐시 무효화가 생성되었습니다: $invalidation_id"
 echo "Frontend Release가 전환되었습니다: $frontend_sha"
