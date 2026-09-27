@@ -153,7 +153,11 @@ jobs:
             echo 'DISCORD_WEBHOOK_URL secret is not configured; skipping external alert.'
             exit 0
           fi
-          payload=$(jq -n --arg content "🚨 Production CD 실패\n저장소: $GITHUB_REPOSITORY\nRelease: ${RELEASE_TAG:-확인 필요}\n로그: $RUN_URL" '{content: $content}')
+          payload=$(jq -n \
+            --arg repo "$GITHUB_REPOSITORY" \
+            --arg release "${RELEASE_TAG:-확인 필요}" \
+            --arg url "$RUN_URL" \
+            '{content: ("🚨 Production CD 실패\n저장소: " + $repo + "\nRelease: " + $release + "\n로그: " + $url)}')
           curl --fail-with-body --silent --show-error \
             -H 'Content-Type: application/json' --data "$payload" "$DISCORD_WEBHOOK_URL"
 
@@ -173,6 +177,10 @@ jobs:
             echo 'DISCORD_WEBHOOK_URL secret is not configured; skipping external notification.'
             exit 0
           fi
-          payload=$(jq -n --arg content "✅ Production CD 완료\n저장소: $GITHUB_REPOSITORY\nRelease: ${RELEASE_TAG:-확인 필요}\n로그: $RUN_URL" '{content: $content}')
+          payload=$(jq -n \
+            --arg repo "$GITHUB_REPOSITORY" \
+            --arg release "${RELEASE_TAG:-확인 필요}" \
+            --arg url "$RUN_URL" \
+            '{content: ("✅ Production CD 완료\n저장소: " + $repo + "\nRelease: " + $release + "\n로그: " + $url)}')
           curl --fail-with-body --silent --show-error \
             -H 'Content-Type: application/json' --data "$payload" "$DISCORD_WEBHOOK_URL"
