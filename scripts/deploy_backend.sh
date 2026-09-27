@@ -21,7 +21,9 @@ current_file="$deploy_dir/current-backend-release.env"
 previous_file="$deploy_dir/previous-backend-release.env"
 candidate_file="$deploy_dir/candidate-backend-release.env"
 
-for command in aws docker curl grep sed tail cp mv sleep flock stat; do
+compose_override_file=""
+
+for command in aws docker curl grep sed tail cp mv sleep flock stat mktemp; do
   command -v "$command" >/dev/null 2>&1 || {
     echo "필수 명령을 찾을 수 없습니다: $command" >&2
     exit 1
@@ -65,7 +67,31 @@ run_compose() {
   local target_sha=$2
   shift 2
   BACKEND_IMAGE="$target_image" RELEASE_SHA="$target_sha" \
-    docker compose --env-file "$env_file" -f "$compose_file" "$@"
+  JWT_SECRET="$jwt_secret" \
+  KAKAO_REST_API_KEY="$kakao_rest_api_key" \
+  KAKAO_REDIRECT_URI="$kakao_redirect_uri" \
+    docker compose --env-file "$env_file" -f "$compose_file" -f "$compose_override_file" "$@"
+}
+
+load_backend_secrets() {
+  echo "Parameter Store에서 Backend 운영 secret을 읽습니다."
+  jwt_secret=$(aws ssm get-parameter --name /bookjeok/prod/JWT_SECRET --with-decryption --query 'Parameter.Value' --output text)
+  kakao_rest_api_key=$(aws ssm get-parameter --name /bookjeok/prod/KAKAO_REST_API_KEY --with-decryption --query 'Parameter.Value' --output text)
+  kakao_redirect_uri=$(aws ssm get-parameter --name /bookjeok/prod/KAKAO_REDIRECT_URI --query 'Parameter.Value' --output text)
+
+  [ -n "$jwt_secret" ] || { echo "SSM JWT_SECRET 값이 비어 있습니다." >&2; exit 1; }
+  [ -n "$kakao_rest_api_key" ] || { echo "SSM KAKAO_REST_API_KEY 값이 비어 있습니다." >&2; exit 1; }
+  [ -n "$kakao_redirect_uri" ] || { echo "SSM KAKAO_REDIRECT_URI 값이 비어 있습니다." >&2; exit 1; }
+
+  compose_override_file=$(mktemp "$deploy_dir/.backend-compose-override.XXXXXX.yml")
+  cat > "$compose_override_file" <<'EOF'
+services:
+  app:
+    environment:
+      JWT_SECRET: ${JWT_SECRET}
+      KAKAO_REST_API_KEY: ${KAKAO_REST_API_KEY}
+      KAKAO_REDIRECT_URI: ${KAKAO_REDIRECT_URI}
+EOF
 }
 
 cleanup_unused_docker_storage() {
@@ -113,7 +139,9 @@ diagnose_failed_deploy() {
   fi
 }
 
-trap 'rm -f -- "$candidate_file"' EXIT
+trap 'rm -f -- "$candidate_file" "$compose_override_file"' EXIT
+
+load_backend_secrets
 
 previous_image=""
 if read_release "$previous_file"; then
