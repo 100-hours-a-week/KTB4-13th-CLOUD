@@ -97,6 +97,23 @@ rollback() {
   fi
 }
 
+diagnose_failed_deploy() {
+  local container_id
+
+  echo "새 AI 이미지 헬스체크에 실패했습니다. 롤백 전 상태를 출력합니다." >&2
+  echo "--- 마지막 헬스체크 응답 ---" >&2
+  printf '%s\n' "${last_health_response:-응답 없음}" >&2
+  echo "--- 컨테이너 상태 ---" >&2
+  run_compose "$image_uri" "$release_sha" ps "$service_name" >&2 || true
+  container_id=$(run_compose "$image_uri" "$release_sha" ps -q "$service_name" 2>/dev/null || true)
+  if [ -n "$container_id" ]; then
+    echo "--- 컨테이너 종료 상태 ---" >&2
+    docker inspect --format 'status={{.State.Status}} exit_code={{.State.ExitCode}} error={{.State.Error}} started_at={{.State.StartedAt}}' "$container_id" >&2 || true
+    echo "--- AI 컨테이너 로그 (최근 200줄) ---" >&2
+    docker logs --tail 200 "$container_id" 2>&1 >&2 || true
+  fi
+}
+
 trap 'rm -f -- "$candidate_file"' EXIT
 
 previous_image=""
@@ -108,15 +125,20 @@ run_compose "$image_uri" "$release_sha" pull "$service_name"
 run_compose "$image_uri" "$release_sha" up -d --no-deps "$service_name"
 
 ready=0
+last_health_response="응답 없음"
+body=""
 for _ in $(seq 1 30); do
-  if curl --fail --silent --show-error --max-time 5 "$health_url" >/dev/null; then
+  if body=$(curl --fail --silent --show-error --max-time 5 --write-out '\n__HTTP_STATUS__:%{http_code}' "$health_url"); then
+    last_health_response="$body"
     ready=1
     break
   fi
+  last_health_response="$body"
   sleep 5
 done
 
 if [ "$ready" -ne 1 ]; then
+  diagnose_failed_deploy
   rollback || true
   exit 1
 fi
