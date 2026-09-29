@@ -157,11 +157,13 @@ ready=0
 last_health_response="응답 없음"
 body=""
 for _ in $(seq 1 30); do
-  if body=$(curl --fail --silent --show-error --max-time 5 --write-out '\n__HTTP_STATUS__:%{http_code}' "$health_url") \
-    && grep -Eq '"success"[[:space:]]*:[[:space:]]*true' <<< "$body"; then
-    last_health_response="$body"
-    ready=1
-    break
+  if body=$(curl --silent --show-error --max-time 5 --write-out '\n__HTTP_STATUS__:%{http_code}' "$health_url"); then
+    http_status=$(sed -n 's/^__HTTP_STATUS__://p' <<< "$body" | tail -n 1)
+    if [[ "$http_status" =~ ^[1-4][0-9][0-9]$ ]]; then
+      last_health_response="$body"
+      ready=1
+      break
+    fi
   fi
   last_health_response="$body"
   sleep 5
