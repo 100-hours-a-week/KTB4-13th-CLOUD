@@ -29,22 +29,30 @@ jobs:
 
             const shas = {};
             for (const service of services) {
+              const { data: branch } = await github.rest.repos.getBranch({
+                owner: context.repo.owner,
+                repo: service.repo,
+                branch: 'main',
+              });
+              const mainSha = branch.commit.sha;
+
               const { data } = await github.rest.actions.listWorkflowRunsForRepo({
                 owner: context.repo.owner,
                 repo: service.repo,
                 branch: 'main',
+                head_sha: mainSha,
                 status: 'success',
                 per_page: 20,
               });
 
               const run = data.workflow_runs.find((candidate) =>
-                candidate.event === 'push' && candidate.head_sha
+                candidate.event === 'push' && candidate.head_sha === mainSha
               );
               if (!run) {
-                core.setFailed(`${service.repo}에 성공한 main CI가 없습니다.`);
+                core.setFailed(`${service.repo}의 최신 main(${mainSha}) CI가 아직 성공하지 않았습니다.`);
                 return;
               }
-              shas[service.key] = run.head_sha;
+              shas[service.key] = mainSha;
             }
 
             const release = `v0.0.${Math.floor(Date.now() / 1000)}`;
