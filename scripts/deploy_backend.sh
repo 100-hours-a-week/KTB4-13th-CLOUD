@@ -67,10 +67,13 @@ run_compose() {
   local target_sha=$2
   shift 2
   BACKEND_IMAGE="$target_image" RELEASE_SHA="$target_sha" \
+  AWS_REGION="$aws_region" \
   JWT_SECRET="$jwt_secret" \
   KAKAO_REST_API_KEY="$kakao_rest_api_key" \
   KAKAO_REDIRECT_URI="$kakao_redirect_uri" \
   SENTRY_DSN="$sentry_dsn" \
+  AI_BASE_URL="$ai_base_url" \
+  AI_SERVICE_TOKEN="$ai_service_token" \
     docker compose --env-file "$env_file" -f "$compose_file" -f "$compose_override_file" "$@"
 }
 
@@ -80,11 +83,15 @@ load_backend_secrets() {
   kakao_rest_api_key=$(aws ssm get-parameter --name /bookjeok/prod/KAKAO_REST_API_KEY --with-decryption --query 'Parameter.Value' --output text)
   kakao_redirect_uri=$(aws ssm get-parameter --name /bookjeok/prod/KAKAO_REDIRECT_URI --query 'Parameter.Value' --output text)
   sentry_dsn=$(aws ssm get-parameter --name /bookjeok/prod/SENTRY_DSN --with-decryption --query 'Parameter.Value' --output text)
+  ai_base_url=$(aws ssm get-parameter --name /bookjeok/prod/AI_BASE_URL --query 'Parameter.Value' --output text)
+  ai_service_token=$(aws ssm get-parameter --name /bookjeok/prod/AI_SERVICE_TOKEN --with-decryption --query 'Parameter.Value' --output text)
 
   [ -n "$jwt_secret" ] || { echo "SSM JWT_SECRET 값이 비어 있습니다." >&2; exit 1; }
   [ -n "$kakao_rest_api_key" ] || { echo "SSM KAKAO_REST_API_KEY 값이 비어 있습니다." >&2; exit 1; }
   [ -n "$kakao_redirect_uri" ] || { echo "SSM KAKAO_REDIRECT_URI 값이 비어 있습니다." >&2; exit 1; }
   [ -n "$sentry_dsn" ] || { echo "SSM SENTRY_DSN 값이 비어 있습니다." >&2; exit 1; }
+  [ -n "$ai_base_url" ] || { echo "SSM AI_BASE_URL 값이 비어 있습니다." >&2; exit 1; }
+  [ -n "$ai_service_token" ] || { echo "SSM AI_SERVICE_TOKEN 값이 비어 있습니다." >&2; exit 1; }
 
   compose_override_file=$(mktemp "$deploy_dir/.backend-compose-override.XXXXXX.yml")
   printf 'services:\n  app:\n    env_file:\n      - %s\n    environment:\n' "$env_file" > "$compose_override_file"
@@ -93,6 +100,15 @@ load_backend_secrets() {
       KAKAO_REST_API_KEY: ${KAKAO_REST_API_KEY}
       KAKAO_REDIRECT_URI: ${KAKAO_REDIRECT_URI}
       SENTRY_DSN: ${SENTRY_DSN}
+      AI_BASE_URL: ${AI_BASE_URL}
+      AI_SERVICE_TOKEN: ${AI_SERVICE_TOKEN}
+    logging:
+      driver: awslogs
+      options:
+        awslogs-region: ${AWS_REGION}
+        awslogs-group: /bookjeok/backend
+        awslogs-stream: app/${HOSTNAME}
+        awslogs-create-group: "true"
 EOF
 }
 

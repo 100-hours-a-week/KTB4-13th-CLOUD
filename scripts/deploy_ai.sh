@@ -17,11 +17,13 @@ ecr_registry=$7
 health_url=$8
 
 env_file="$deploy_dir/.env"
+compose_override_file=""
+ssm_env_file=""
 current_file="$deploy_dir/current-ai-release.env"
 previous_file="$deploy_dir/previous-ai-release.env"
 candidate_file="$deploy_dir/candidate-ai-release.env"
 
-for command in aws docker curl grep sed tail cp mv sleep flock stat; do
+for command in aws docker curl grep sed tail cp mv sleep flock stat mktemp; do
   command -v "$command" >/dev/null 2>&1 || {
     echo "필수 명령을 찾을 수 없습니다: $command" >&2
     exit 1
@@ -66,7 +68,35 @@ run_compose() {
   local target_sha=$2
   shift 2
   AI_IMAGE="$target_image" RELEASE_SHA="$target_sha" \
-    docker compose --env-file "$env_file" -f "$compose_file" "$@"
+  AWS_REGION="$aws_region" \
+  AI_SERVICE_TOKEN="$ai_service_token" \
+    docker compose --env-file "$env_file" -f "$compose_file" -f "$compose_override_file" "$@"
+}
+
+load_ai_secrets() {
+  echo "Parameter Store에서 AI 운영 설정을 읽습니다."
+  ssm_env_file=$(mktemp "$deploy_dir/.ai-ssm-env.XXXXXX")
+  aws ssm get-parameters-by-path \
+    --path /bookjeok/prod/ai \
+    --recursive --with-decryption \
+    --query 'Parameters[*].[Name,Value]' --output text \
+    | while IFS=$'\t' read -r parameter_name parameter_value; do
+        [ -n "$parameter_name" ] || continue
+        variable_name=${parameter_name##*/}
+        printf '%s=%s\n' "$variable_name" "$parameter_value"
+      done > "$ssm_env_file"
+
+  ai_service_token=$(sed -n 's/^AI_SERVICE_TOKEN=//p' "$ssm_env_file" | tail -n 1)
+
+  [ -n "$ai_service_token" ] || {
+    echo "SSM /bookjeok/prod/ai/AI_SERVICE_TOKEN 값이 없거나 비어 있습니다." >&2
+    exit 1
+  }
+}
+
+configure_cloudwatch_logging() {
+  compose_override_file=$(mktemp "$deploy_dir/.ai-compose-override.XXXXXX.yml")
+  printf 'services:\n  %s:\n    env_file:\n      - %s\n    logging:\n      driver: awslogs\n      options:\n        awslogs-region: ${AWS_REGION}\n        awslogs-group: /bookjeok/ai\n        awslogs-stream: ai/${HOSTNAME}\n        awslogs-create-group: "true"\n' "$service_name" "$ssm_env_file" > "$compose_override_file"
 }
 
 cleanup_unused_docker_storage() {
@@ -114,7 +144,10 @@ diagnose_failed_deploy() {
   fi
 }
 
-trap 'rm -f -- "$candidate_file"' EXIT
+trap 'rm -f -- "$candidate_file" "$compose_override_file" "$ssm_env_file"' EXIT
+
+load_ai_secrets
+configure_cloudwatch_logging
 
 previous_image=""
 if read_release "$previous_file"; then
