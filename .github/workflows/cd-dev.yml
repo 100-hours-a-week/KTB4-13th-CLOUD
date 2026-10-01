@@ -20,6 +20,8 @@ env:
   DEV_FRONTEND_BUCKET: ${{ vars.DEV_FRONTEND_BUCKET }}
   DEV_CLOUDFRONT_DISTRIBUTION_ID: ${{ vars.DEV_CLOUDFRONT_DISTRIBUTION_ID }}
   DEV_API_BASE_URL: ${{ vars.DEV_API_BASE_URL }}
+  DEV_KAKAO_REDIRECT_URI: ${{ vars.DEV_KAKAO_REDIRECT_URI }}
+  DEV_KAKAO_REST_API_KEY: ${{ vars.DEV_KAKAO_REST_API_KEY }}
   ECR_REGISTRY: 522688057030.dkr.ecr.${{ vars.AWS_REGION }}.amazonaws.com
 
 jobs:
@@ -66,6 +68,8 @@ jobs:
         working-directory: services/frontend
         env:
           VITE_API_BASE_URL: ${{ env.DEV_API_BASE_URL }}
+          VITE_KAKAO_REDIRECT_URI: ${{ env.DEV_KAKAO_REDIRECT_URI }}
+          VITE_KAKAO_REST_API_KEY: ${{ env.DEV_KAKAO_REST_API_KEY }}
         run: |
           npm ci
           npm run lint
