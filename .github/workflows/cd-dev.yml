@@ -1,0 +1,143 @@
+name: Dev Deployment
+
+on:
+  repository_dispatch:
+    types: [dev-deploy]
+  workflow_dispatch:
+    inputs:
+      service:
+        description: 배포할 서비스
+        required: true
+        type: choice
+        options: [frontend, backend, ai]
+      sha:
+        description: 배포할 서비스 Commit SHA
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: dev-deployment
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  AWS_CD_ROLE_ARN: ${{ vars.AWS_CD_ROLE_ARN }}
+  DEV_AI_INSTANCE_ID: ${{ vars.DEV_AI_INSTANCE_ID }}
+  DEV_BACKEND_INSTANCE_ID: ${{ vars.DEV_BACKEND_INSTANCE_ID }}
+  DEV_FRONTEND_BUCKET: ${{ vars.DEV_FRONTEND_BUCKET }}
+  DEV_CLOUDFRONT_DISTRIBUTION_ID: ${{ vars.DEV_CLOUDFRONT_DISTRIBUTION_ID }}
+  DEV_API_BASE_URL: ${{ vars.DEV_API_BASE_URL }}
+  ECR_REGISTRY: 522688057030.dkr.ecr.${{ vars.AWS_REGION }}.amazonaws.com
+
+jobs:
+  resolve:
+    name: Resolve Dev deployment
+    runs-on: ubuntu-latest
+    outputs:
+      service: ${{ steps.input.outputs.service }}
+      sha: ${{ steps.input.outputs.sha }}
+    steps:
+      - id: input
+        env:
+          EVENT_SERVICE: ${{ github.event.client_payload.service }}
+          EVENT_SHA: ${{ github.event.client_payload.sha }}
+          MANUAL_SERVICE: ${{ inputs.service }}
+          MANUAL_SHA: ${{ inputs.sha }}
+        run: |
+          service="${EVENT_SERVICE:-$MANUAL_SERVICE}"
+          sha="${EVENT_SHA:-$MANUAL_SHA}"
+          [[ "$service" =~ ^(frontend|backend|ai)$ ]]
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
+          echo "service=$service" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+  deploy-frontend:
+    name: Deploy Dev Frontend
+    needs: resolve
+    if: needs.resolve.outputs.service == 'frontend'
+    runs-on: ubuntu-latest
+    env:
+      FRONTEND_SHA: ${{ needs.resolve.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: 100-hours-a-week/KTB4-13th-FE
+          ref: ${{ env.FRONTEND_SHA }}
+          path: services/frontend
+          token: ${{ secrets.SERVICE_REPO_READ_TOKEN }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: services/frontend/package-lock.json
+      - name: Build Dev Frontend
+        working-directory: services/frontend
+        env:
+          VITE_API_BASE_URL: ${{ env.DEV_API_BASE_URL }}
+        run: |
+          npm ci
+          npm run lint
+          npm run build
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_CD_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Deploy Dev Frontend
+        run: bash scripts/deploy_frontend.sh services/frontend/dist "$FRONTEND_SHA" "$DEV_FRONTEND_BUCKET" "$DEV_CLOUDFRONT_DISTRIBUTION_ID"
+
+  deploy-container:
+    name: Deploy Dev Container
+    needs: resolve
+    if: needs.resolve.outputs.service == 'backend' || needs.resolve.outputs.service == 'ai'
+    runs-on: ubuntu-latest
+    env:
+      SERVICE: ${{ needs.resolve.outputs.service }}
+      SERVICE_SHA: ${{ needs.resolve.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_CD_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Resolve deployment parameters
+        id: params
+        run: |
+          if [ "$SERVICE" = ai ]; then
+            repository=bookjeok-ai
+            instance="$DEV_AI_INSTANCE_ID"
+            directory=/opt/bookjeok-ai-dev
+            compose_service=ai-server
+            health=http://127.0.0.1:8000/health
+          else
+            repository=bookjeok-be
+            instance="$DEV_BACKEND_INSTANCE_ID"
+            directory=/opt/bookjeok-dev
+            compose_service=app
+            health=http://127.0.0.1:8080/actuator/health
+          fi
+          digest=$(aws ecr describe-images --repository-name "$repository" --image-ids "imageTag=$SERVICE_SHA" --query 'imageDetails[0].imageDigest' --output text)
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          echo "instance=$instance" >> "$GITHUB_OUTPUT"
+          echo "directory=$directory" >> "$GITHUB_OUTPUT"
+          echo "compose_service=$compose_service" >> "$GITHUB_OUTPUT"
+          echo "health=$health" >> "$GITHUB_OUTPUT"
+          echo "image=$ECR_REGISTRY/$repository@$digest" >> "$GITHUB_OUTPUT"
+      - name: Deploy through SSM
+        run: |
+          bash scripts/send-ssm.sh "${{ steps.params.outputs.instance }}" \
+            scripts/deploy_service_dev.sh \
+            "${{ steps.params.outputs.directory }}" \
+            docker-compose.yml \
+            "${{ steps.params.outputs.compose_service }}" \
+            "${{ steps.params.outputs.image }}" \
+            "$AWS_REGION" "$ECR_REGISTRY" \
+            "${{ steps.params.outputs.health }}"
