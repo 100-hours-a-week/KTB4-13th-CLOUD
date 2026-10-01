@@ -3,17 +3,6 @@ name: Dev Deployment
 on:
   repository_dispatch:
     types: [dev-deploy]
-  workflow_dispatch:
-    inputs:
-      service:
-        description: 배포할 서비스
-        required: true
-        type: choice
-        options: [frontend, backend, ai]
-      sha:
-        description: 배포할 서비스 Commit SHA
-        required: true
-        type: string
 
 permissions:
   contents: read
@@ -45,11 +34,9 @@ jobs:
         env:
           EVENT_SERVICE: ${{ github.event.client_payload.service }}
           EVENT_SHA: ${{ github.event.client_payload.sha }}
-          MANUAL_SERVICE: ${{ inputs.service }}
-          MANUAL_SHA: ${{ inputs.sha }}
         run: |
-          service="${EVENT_SERVICE:-$MANUAL_SERVICE}"
-          sha="${EVENT_SHA:-$MANUAL_SHA}"
+          service="$EVENT_SERVICE"
+          sha="$EVENT_SHA"
           [[ "$service" =~ ^(frontend|backend|ai)$ ]]
           [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
           echo "service=$service" >> "$GITHUB_OUTPUT"
