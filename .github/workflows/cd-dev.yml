@@ -52,6 +52,10 @@ jobs:
     env:
       FRONTEND_SHA: ${{ needs.resolve.outputs.sha }}
     steps:
+      - name: Check out Cloud repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/checkout@v4
         with:
           repository: 100-hours-a-week/KTB4-13th-FE
@@ -112,7 +116,7 @@ jobs:
             repository=bookjeok-be
             instance="$DEV_BACKEND_INSTANCE_ID"
             directory=/opt/bookjeok-dev
-            compose_service=app
+            compose_service=backend
             health=http://127.0.0.1:8080/actuator/health
           fi
           digest=$(aws ecr describe-images --repository-name "$repository" --image-ids "imageTag=$SERVICE_SHA" --query 'imageDetails[0].imageDigest' --output text)
