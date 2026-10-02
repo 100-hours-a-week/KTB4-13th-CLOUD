@@ -4,7 +4,7 @@
 
 실제 사용자 플로우를 기반으로 Smoke, Load, Spike 테스트를 수행한다. 결과는 SLI/SLO 문서의 가용성·지연시간·업무 성공률 기준으로 판정한다. 이 문서는 부하 시나리오만 정의하며 장애 대응 Runbook은 포함하지 않는다.
 
-- 운영이 아닌 Staging을 우선 사용한다.
+- 운영이 아닌 Dev 환경을 사용한다.
 - 테스트 계정·상품·주소·주문 데이터는 운영 데이터와 분리한다.
 - 카카오 로그인은 외부 인증 의존성이 있으므로 매 VU가 반복 호출하지 않는다. 인증이 필요한 흐름은 사전 발급 Access Token을 사용한다.
 - AI 추천은 AI mock 테스트와 실제 AI 테스트를 분리한다.
@@ -19,7 +19,7 @@
 → 일부 사용자는 장바구니·주문으로 이동
 ```
 
-주요 API: `GET /api/v1/items`, `GET /api/v1/search`, `GET /api/v1/products/{productId}`, `GET /api/v1/cart`, `POST /api/v1/cart/items`, `POST /api/v1/orders`
+주요 API: `GET /api/v1/items`, `GET /api/v1/search`, `GET /api/v1/products/{productId}`, `GET /api/v1/cart`, `POST /api/v1/cart/items`, `POST /api/v1/orders/checkout`
 
 ### 기존 사용자 — AI 추천
 
@@ -60,7 +60,7 @@
 → 주문 생성 → 주문 목록 → 주문 상세
 ```
 
-주요 API: `GET /api/v1/products/{productId}`, `GET /api/v1/cart`, `POST /api/v1/cart/items`, `GET /api/v1/user-addresses`, `POST /api/v1/orders`, `GET /api/v1/orders`, `GET /api/v1/orders/{orderKey}`
+주요 API: `GET /api/v1/products/{productId}`, `GET /api/v1/cart`, `POST /api/v1/cart/items`, `GET /api/v1/user-addresses`, `POST /api/v1/orders/checkout`, `GET /api/v1/orders`, `GET /api/v1/orders/{orderKey}`
 
 - VU마다 서로 다른 테스트 계정 또는 독립 장바구니를 사용한다.
 - 주문용 상품은 충분한 재고가 있는 전용 상품을 사용한다.
@@ -212,3 +212,19 @@ AI 추천 세션은 검색 요청 대신 AI 추천 요청과 추천 카드 조�
 6. Spike 50 → 200 VU 실행
 7. 필요할 때만 500 VU 단계 추가
 ```
+
+## 8. API별 병목 벤치마크
+
+혼합 사용자 여정과 별도로 다음 API를 독립 측정한다. 상세 실행 조건과 명령은 `BENCHMARKS.md`를 따른다.
+
+| 시나리오 | 부하 단계 | 비교 조건 | 주요 측정값 |
+|---|---|---|---|
+| 상품 목록·인기순 | 50 → 100 → 300 → 500 VU | 동일 첫 페이지 | RPS, p50/p95/p99, 에러율 |
+| 검색 결과 | 50 → 100 → 300 → 500 VU | 동일·서로 다른 검색어 | RPS, p50/p95/p99, timeout율 |
+| 상품 상세 | 50 → 100 → 300 → 500 VU | 동일·서로 다른 상품 | RPS, p95/p99, 에러율 |
+| 동일 상품 주문 | 50·100·300 VU 개별 실행 | VU당 주문 1회 | TPS, p95/p99, 성공·실패율 |
+| 주문 상품 개수 | 1·10·30·50개 개별 실행 | 동일 동시 사용자 수 | TPS, p95/p99 |
+| AI 채팅 | 1·10·30·50 VU 개별 실행 | VU당 채팅 1회 | 평균, p95/p99, timeout/error율 |
+| 스냅샷 갱신 중 조회 | 50 VU 지속 | 갱신 전·중·후 | p95/p99 변화, DB 지표 |
+
+주문 생성은 현재 재고를 차감하지 않고 재고 수량만 검증한다. 동시 주문 테스트 후 주문 건수는 성공 수만큼 증가하고 상품 재고는 테스트 전후 동일해야 한다.

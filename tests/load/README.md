@@ -1,6 +1,11 @@
 # V1 부하테스트 실행 안내
 
-이 디렉터리는 백엔드 API를 대상으로 하는 k6 기반 smoke/load/spike 테스트의 기준입니다.
+이 디렉터리는 Dev Backend API를 대상으로 하는 k6 기반 부하테스트의 기준입니다.
+
+- 혼합 사용자 여정: `smoke.js`, `load.js`, `spike.js`
+- API별 병목 벤치마크: `k6/benchmarks/*.js`
+- 실행 방법: [BENCHMARKS.md](./BENCHMARKS.md)
+- 결과 기록: [RESULTS_TEMPLATE.md](./RESULTS_TEMPLATE.md)
 
 ## 대상 흐름
 
@@ -13,19 +18,19 @@
 ## 실행
 
 ```bash
-BASE_URL=https://staging.example.com \
+BASE_URL=https://api-dev.example.com \
 ACCESS_TOKENS='token-a,token-b,token-c' \
 k6 run tests/load/k6/smoke.js
 ```
 
 ```bash
-BASE_URL=https://staging.example.com \
+BASE_URL=https://api-dev.example.com \
 ACCESS_TOKENS='token-a,token-b,token-c' \
 k6 run tests/load/k6/load.js
 ```
 
 ```bash
-BASE_URL=https://staging.example.com \
+BASE_URL=https://api-dev.example.com \
 ACCESS_TOKENS='token-a,token-b,token-c' \
 k6 run tests/load/k6/spike.js
 ```
@@ -69,8 +74,8 @@ VU 수는 고정된 표준값이 아니라 현재 서비스 규모와 홍보 직
 
 ## 사전 준비
 
-1. staging DB에 테스트 상품과 테스트 계정을 준비합니다.
+1. Dev DB에 테스트 상품과 테스트 계정을 준비합니다.
 2. 각 토큰이 서로 다른 계정인지 확인합니다. 장바구니 추가와 주문 계열은 같은 계정 공유 시 데이터 경합이 발생합니다.
 3. `PRODUCT_ID`가 실제 활성 재고 상품인지 확인합니다.
 4. CloudWatch에서 Application Signals, DB connection pool, CPU, memory를 함께 확인합니다.
-5. 주문 생성과 AI 추천 채팅은 외부 결제·AI 비용과 상태 변경이 있어 v1에서는 별도 승인 후 추가합니다.
+5. 주문 생성과 AI 추천 채팅은 전용 스크립트로 분리하며, 데이터와 외부 AI 비용을 확인한 뒤 실행합니다.
