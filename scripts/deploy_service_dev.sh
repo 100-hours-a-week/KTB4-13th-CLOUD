@@ -26,8 +26,16 @@ aws ecr get-login-password --region "$aws_region" | docker login --username AWS 
 AI_IMAGE="$image_uri" BACKEND_IMAGE="$image_uri" docker compose --env-file .env -f "$compose_file" pull "$service_name"
 AI_IMAGE="$image_uri" BACKEND_IMAGE="$image_uri" docker compose --env-file .env -f "$compose_file" up -d --no-deps "$service_name"
 
+cleanup_unused_images() {
+  echo "사용하지 않는 이전 Docker 이미지를 정리합니다."
+  if ! docker image prune --all --force; then
+    echo "경고: 이전 Docker 이미지 정리에 실패했습니다. 서비스 배포는 유지합니다." >&2
+  fi
+}
+
 for _ in $(seq 1 30); do
   if curl --fail --silent --show-error --max-time 5 "$health_url" >/dev/null; then
+    cleanup_unused_images
     echo "Dev 배포가 완료되었습니다: $service_name"
     exit 0
   fi
