@@ -22,6 +22,10 @@ export default function () {
 
   productIds.slice(0, itemCount).forEach((productId) => {
     const cartResponse = http.post(`${api}/cart/items`, JSON.stringify({ productId, quantity: 1 }), params);
+    if (cartResponse.status !== 200 && failureLogs < 10) {
+      console.log(`[order-setup] productId=${productId}, status=${cartResponse.status}, error=${cartResponse.error || 'none'}, body=${String(cartResponse.body || '').slice(0, 300)}`);
+      failureLogs += 1;
+    }
     check(cartResponse, { 'order setup: cart item added': (response) => response.status === 200 });
   });
 
