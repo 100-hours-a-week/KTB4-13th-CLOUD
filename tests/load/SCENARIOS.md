@@ -1,230 +1,176 @@
 # V1 부하테스트 시나리오
 
-## 1. 목적과 전제
+## 실행 안내
 
-실제 사용자 플로우를 기반으로 Smoke, Load, Spike 테스트를 수행한다. 결과는 SLI/SLO 문서의 가용성·지연시간·업무 성공률 기준으로 판정한다. 이 문서는 부하 시나리오만 정의하며 장애 대응 Runbook은 포함하지 않는다.
+Dev Backend API를 대상으로 k6 부하테스트를 실행한다.
 
-- 운영이 아닌 Dev 환경을 사용한다.
-- 테스트 계정·상품·주소·주문 데이터는 운영 데이터와 분리한다.
-- 카카오 로그인은 외부 인증 의존성이 있으므로 매 VU가 반복 호출하지 않는다. 인증이 필요한 흐름은 사전 발급 Access Token을 사용한다.
-- AI 추천은 AI mock 테스트와 실제 AI 테스트를 분리한다.
-- k6는 프론트엔드가 아니라 Backend API를 직접 호출한다.
+필요한 환경변수는 `BASE_URL`, `ACCESS_TOKENS`, `PRODUCT_ID`, `SEARCH_QUERY`, `SECOND_SEARCH_QUERY`, `AI_MESSAGE`이다.
+
+```bash
+BASE_URL=https://api-dev.bookjeok.site \
+ACCESS_TOKENS='token-a,token-b,token-c' \
+k6 run tests/load/k6/smoke.js
+```
+
+Load와 Spike는 위 명령의 파일명만 각각 `load.js`, `spike.js`로 바꿔 실행한다. 실행 순서는 Smoke → API별 상세 테스트 → Load → 주문·AI·스냅샷 갱신 → Spike다.
+
+API별 상세 테스트는 `tests/load/k6/api-tests` 아래 스크립트를 사용한다. 주문과 AI 테스트는 `ACCESS_TOKENS`가 필요하며, `PRODUCT_ID` 또는 `PRODUCT_IDS`에는 Dev에서 실제로 판매 중인 상품 ID를 넣는다.
+
+```bash
+# 상품 목록·인기순: 50 → 100 → 300 VU
+BASE_URL=https://api-dev.bookjeok.site k6 run tests/load/k6/api-tests/product-list.js
+
+# 검색: 동일 검색어 / 서로 다른 검색어를 각각 실행
+SEARCH_MODE=same SEARCH_QUERIES='여행,소설,역사' k6 run tests/load/k6/api-tests/search.js
+SEARCH_MODE=varied SEARCH_QUERIES='여행,소설,역사' k6 run tests/load/k6/api-tests/search.js
+
+# 상품 상세: 동일 상품 / 서로 다른 상품을 각각 실행
+DETAIL_MODE=same PRODUCT_ID=2103860 k6 run tests/load/k6/api-tests/product-detail.js
+DETAIL_MODE=varied PRODUCT_IDS='2103860,2103861,2103862' k6 run tests/load/k6/api-tests/product-detail.js
+
+# 주문 생성: 50·100·300건 동시 요청
+ORDER_VUS=50 ACCESS_TOKENS='token-a,token-b' PRODUCT_ID=2103860 k6 run tests/load/k6/api-tests/order-concurrency.js
+ORDER_VUS=100 ACCESS_TOKENS='token-a,token-b' PRODUCT_ID=2103860 k6 run tests/load/k6/api-tests/order-concurrency.js
+ORDER_VUS=300 ACCESS_TOKENS='token-a,token-b' PRODUCT_ID=2103860 k6 run tests/load/k6/api-tests/order-concurrency.js
+
+# 주문 상품 수: 1·10·30·50개를 각각 실행
+ITEM_COUNT=1 ORDER_VUS=50 ACCESS_TOKENS='token-a,token-b' PRODUCT_IDS='2103860,2103861' k6 run tests/load/k6/api-tests/order-item-count.js
+ITEM_COUNT=10 ORDER_VUS=50 ACCESS_TOKENS='token-a,token-b' PRODUCT_IDS='2103860,2103861' k6 run tests/load/k6/api-tests/order-item-count.js
+
+# AI 채팅: 1·10·30·50 VU를 각각 실행
+AI_VUS=1 ACCESS_TOKENS='token-a,token-b' k6 run tests/load/k6/api-tests/ai-chat.js
+AI_VUS=10 ACCESS_TOKENS='token-a,token-b' k6 run tests/load/k6/api-tests/ai-chat.js
+
+# 인기순 스냅샷 갱신 전·중·후에 각각 실행
+REFRESH_PHASE=before k6 run tests/load/k6/api-tests/popularity-refresh.js
+REFRESH_PHASE=during k6 run tests/load/k6/api-tests/popularity-refresh.js
+REFRESH_PHASE=after k6 run tests/load/k6/api-tests/popularity-refresh.js
+```
+
+`REFRESH_PHASE=during` 실행 시점은 스냅샷 갱신 작업과 맞추고, 갱신 시작·종료 시각을 별도로 기록한다. 주문 테스트는 테스트 계정별 토큰을 겹치지 않게 준비하고, 실행 전후 주문 건수와 재고를 확인한다.
+
+## 1. 목적과 공통 조건
+
+Dev 환경에서 실제 사용자 흐름과 핵심 API에 부하를 발생시켜 응답시간, 처리량, 오류율, 병목 지점을 확인한다. k6로 Backend API를 직접 호출하며, 카카오 로그인은 사전 발급한 테스트 토큰으로 대체한다.
+
+- 대상: `https://api-dev.bookjeok.site`
+- Smoke·Load·Spike 최대 부하: 300 VU. API별 인기순·검색 테스트는 현재 상태 확인을 위해 최대 500 VU까지 별도로 수행한다.
+- 데이터: Dev 전용 계정·상품·주소·재고
+- 공통 측정: VU, RPS 또는 TPS, p50/p95/p99, 에러율, timeout 비율
+- 일반 API p95: 1초 이내
+- 주문·AI API p95: 2초 이내
+- 에러율 1% 미만, timeout 0.1% 미만
+- 가능하면 App CPU·Memory, DB CPU·Connection, slow query, AI 호출시간도 기록
 
 ## 2. 사용자 플로우
 
-### 기존 사용자 — 일반 검색
+### 일반 검색
 
 ```text
-홈 조회 → 검색 → 검색 결과 → 재검색 → 도서 상세 3권 비교
-→ 일부 사용자는 장바구니·주문으로 이동
+홈 조회 → 검색 → 검색 결과 → 재검색 → 상품 상세 3권 비교
 ```
 
-주요 API: `GET /api/v1/items`, `GET /api/v1/search`, `GET /api/v1/products/{productId}`, `GET /api/v1/cart`, `POST /api/v1/cart/items`, `POST /api/v1/orders/checkout`
-
-### 기존 사용자 — AI 추천
+### AI 추천
 
 ```text
-홈 조회 → AI 추천 질문 → 추천 도서 3권 확인 → 상세 3권 비교
-→ 일부 사용자는 장바구니·주문으로 이동
+홈 조회 → AI 추천 질문 → 추천 결과 확인 → 상품 상세 3권 비교
 ```
 
-주요 API: `GET /api/v1/recommend/feed`, `POST /api/v1/recommend/chat`, `GET /api/v1/recommend/cards/{recommendationCardId}`, `GET /api/v1/products/{productId}`
-
-### 기존 사용자 — 홈 큐레이션
+### 홈 큐레이션
 
 ```text
-홈 조회 → 랭킹·개인화 추천 → 추천 도서 확인 → 상세 3권 비교
-→ 일부 사용자는 장바구니·주문으로 이동
+홈 조회 → 인기순·개인화 추천 확인 → 상품 상세 3권 비교
 ```
 
-주요 API: `GET /api/v1/items?sort=POPULARITY`, `GET /api/v1/recommend/feed?surface=home`, `GET /api/v1/products/{productId}`
-
-### 신규 사용자 — 일반 검색·AI 추천·홈 큐레이션
-
-신규 사용자는 인증·온보딩을 완료한 상태를 사전 준비하여 탐색 부하를 재현한다.
+### 구매 전환
 
 ```text
-카카오 로그인 완료 → 회원·온보딩 완료 → 홈
-→ 일반 검색 또는 AI 추천 또는 홈 큐레이션
-→ 도서 상세 3권 비교
+상품 상세 → 장바구니 조회 → 상품 추가 → 주소 조회
+→ 주문 생성 → 주문 목록·상세 확인
 ```
 
-인증·온보딩 API 자체는 별도 시나리오로 측정한다.
+검색·AI 추천·홈 큐레이션은 각각 40%·30%·30% 비율로 시작한다. 탐색 세션의 15%는 구매 전환으로 이어진다고 가정한다. 주문 테스트에서는 계정별 장바구니를 분리하고, 충분한 재고가 있는 Dev 전용 상품을 사용한다.
 
-## 3. 공통 구매 전환 플로우
-
-탐색과 데이터 변경을 구분하기 위해 구매 전환은 별도 흐름으로 측정한다.
-
-```text
-도서 상세 → 장바구니 조회 → 상품 추가 → 주소 조회
-→ 주문 생성 → 주문 목록 → 주문 상세
-```
-
-주요 API: `GET /api/v1/products/{productId}`, `GET /api/v1/cart`, `POST /api/v1/cart/items`, `GET /api/v1/user-addresses`, `POST /api/v1/orders/checkout`, `GET /api/v1/orders`, `GET /api/v1/orders/{orderKey}`
-
-- VU마다 서로 다른 테스트 계정 또는 독립 장바구니를 사용한다.
-- 주문용 상품은 충분한 재고가 있는 전용 상품을 사용한다.
-- 주문 생성은 테스트 계정당 사전 정의한 횟수로 제한한다.
-- 동시 재고 소진 테스트는 본 시나리오와 분리한다.
-
-## 4. 테스트 유형
+## 3. 테스트 유형
 
 ### Smoke
 
-전체 플로우, 인증 토큰, 테스트 데이터, 계측이 정상인지 확인한다. 성능 한계 측정은 목적이 아니다.
+정상 동작, 토큰, 테스트 데이터, 측정 구성을 확인한다.
 
 ```text
 1 VU 1분 → 5 VU까지 30초 → 5 VU 3분 유지 → 0 VU
 ```
 
-일반 검색·AI 추천·홈 큐레이션 중 최소 1개와 구매 전환의 핵심 API를 포함한다.
-
 ### Load
 
-일반적인 서비스 이용과 예상 Peak보다 여유 있는 부하를 단계적으로 검증한다.
+일반적인 지속 부하에서 성능과 병목을 확인한다.
 
 ```text
-20 VU 5분 → 50 VU 10분 → 100 VU 10분 → 0 VU 3분
+20 VU 2분 증가 → 20 VU 5분
+→ 50 VU 2분 증가 → 50 VU 10분
+→ 100 VU 2분 증가 → 100 VU 10분
+→ 0 VU 3분 회복
 ```
-
-검색·AI 추천·홈 큐레이션·구매 전환의 비율은 실제 이용 가설을 확정한 뒤 적용한다.
 
 ### Spike
 
-홍보 직후 짧은 시간에 200명 이상이 유입되는 상황과 회복을 확인한다.
+급격한 유입과 부하 감소 후 회복을 확인한다.
 
 ```text
-50 VU 5분
-→ 200 VU까지 30초
-→ 200 VU 5분
-→ 필요 시 500 VU까지 30초
-→ 500 VU 5분
-→ 50 VU까지 30초
-→ 50 VU 10분
-→ 0 VU
+50 VU 5분 → 200 VU까지 30초 → 200 VU 5분
+→ 300 VU까지 30초 → 300 VU 5분
+→ 50 VU까지 30초 → 50 VU 10분 → 0 VU
 ```
 
-홍보 직후 초기 사용자 구성 가설은 `비회원 탐색 60%`, `신규 회원 탐색 40%`다. 인증·온보딩은 매번 실행하지 않고 사전 준비 계정으로 재현한다.
+## 4. API별 상세 측정 시나리오
 
-## 5. 요청 모델
+아래 항목은 사용자 플로우와 별도로 API별 병목을 확인하기 위한 시나리오다. 각 항목은 공통 측정값과 함께 필요한 인프라 지표를 기록한다.
 
-```text
-탐색형 세션: 약 6 requests / 약 10분
-구매형 세션: 약 12 requests / 약 20분
-```
+### 상품 목록·인기순 조회
 
-사용자 1명당 평균 3권의 상세를 비교한다. 모든 VU가 같은 API만 반복하지 않고, 사용자 유형별 플로우와 합의된 요청 비율을 적용한다.
+동일한 인기순 첫 페이지 요청을 반복한다. 50 → 100 → 300 VU로 증가시키며 RPS, p50/p95/p99, 에러율을 측정하고 DB CPU와 DB Connection 사용량을 확인한다.
 
-### 5.1 일반 Load 사용자 비율 가설
+### 검색 결과 조회
 
-초기 서비스의 핵심 가치가 개인화 추천이지만, 사용자가 이미 찾고 있는 책을 직접 검색하는 행동도 중요하다고 보고 다음과 같이 시작한다.
+동일 검색어와 서로 다른 검색어를 각각 테스트한다. 부하를 단계적으로 증가시키며 RPS, p50/p95/p99, 에러율, timeout 비율을 측정한다. 가능하면 Backend에서 AI를 호출하는 데 걸린 시간도 기록한다.
 
-| 사용자 흐름 | 비율 | 근거 |
-|---|---:|---|
-| 기존 사용자 일반 검색 | 40% | 가장 보편적인 탐색 방식이며 검색·재검색 요청이 발생함 |
-| 기존 사용자 AI 추천 | 30% | 서비스의 핵심 차별화 기능이며 AI 외부 의존성을 검증함 |
-| 기존 사용자 홈 큐레이션 | 30% | 홈 진입 시 랭킹·개인화 추천 조회를 검증함 |
+### 상품 상세 조회
 
-각 탐색 세션 중 **15%는 구매 전환 플로우**로 이어지는 것으로 가정한다. 구매 전환 사용자는 탐색 요청 이후 장바구니·주문 API를 추가로 호출한다.
+동일 상품 조회와 서로 다른 상품 조회를 각각 테스트한다. RPS, p95/p99, 에러율을 측정하고 DB CPU와 DB Connection 사용량을 확인한다.
 
-```text
-일반 Load 탐색 유형: 검색 40% / AI 추천 30% / 홈 큐레이션 30%
-탐색 후 구매 전환: 15%
-```
+### 주문 생성
 
-### 5.2 홍보 직후 Spike 사용자 비율 가설
+동일 상품에 50·100·300건의 주문을 동시에 요청한다. TPS, p95/p99, 성공·실패율을 측정하고 종료 후 최종 주문 건수와 재고 상태를 확인한다.
 
-홍보 직후에는 문서의 유입 가설을 유지한다.
+### 주문 상품 개수별 성능
 
-```text
-비회원 탐색 60% / 신규 회원 탐색 40%
-```
+한 주문에 포함되는 상품 수를 1·10·30·50개로 나누어 각각 테스트한다. TPS와 p95/p99를 측정하고 가능하면 요청당 DB Query 수도 기록한다.
 
-각 그룹 안의 탐색 방식은 다음과 같이 가정한다.
+### AI 채팅
 
-| 사용자 그룹 | 일반 검색 | AI 추천 | 홈 큐레이션 | 합계 |
-|---|---:|---:|---:|---:|
-| 비회원 | 50% | 25% | 25% | 60% |
-| 신규 회원 | 40% | 35% | 25% | 40% |
+동시 요청을 1·10·30·50 VU로 증가시킨다. 평균 응답시간, p95/p99, timeout·에러 비율을 측정하고 AI 서버 CPU·Memory와 Backend → AI 호출시간을 확인한다.
 
-전체 Spike 트래픽으로 환산하면 다음과 같다.
+### 인기순 스냅샷 갱신 중 조회
 
-```text
-비회원 일반 검색: 30%
-비회원 AI 추천: 15%
-비회원 홈 큐레이션: 15%
-신규 회원 일반 검색: 16%
-신규 회원 AI 추천: 14%
-신규 회원 홈 큐레이션: 10%
-```
+갱신 전·중·후에 동일한 인기순 조회를 발생시킨다. 조회 API의 p95/p99 변화, 에러율, DB CPU·Connection, 스냅샷 전체 갱신시간을 기록한다.
 
-홍보 직후에는 가입 직후 바로 구매하는 비율을 낮게 보고, 탐색 세션의 **5%만 구매 전환**으로 가정한다. 구매 전환은 Spike의 주 트래픽이 아니라 별도 소수 트래픽으로 섞는다.
+## 5. 결과 기록
 
-### 5.3 탐색 세션의 요청 비율 가설
+| 시나리오 | VU | RPS/TPS | p50 | p95 | p99 | 에러율 | timeout |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 상품 목록·인기순 |  |  |  |  |  |  |  |
+| 검색 |  |  |  |  |  |  |  |
+| 상품 상세 |  |  |  |  |  |  |  |
 
-사용자 행동을 API 단위로 환산하기 위한 초기 모델이다. 실제 프론트엔드 호출 횟수와 테스트 결과를 확인하여 조정한다.
+주문은 성공·실패 건수와 테스트 전후 주문·재고를 함께 기록한다. AI와 스냅샷 갱신은 관련 인프라 지표를 추가한다.
 
-| 요청 그룹 | 일반 탐색 세션 | 구매 전환 세션 |
-|---|---:|---:|
-| 홈·랭킹·추천 피드 | 1 | 1 |
-| 검색·재검색 및 결과 | 2 | 3 |
-| 상품 상세 비교 | 3 | 3 |
-| 장바구니·주소 | 0 | 2 |
-| 주문·주문 결과 | 0 | 3 |
-| 합계 | 6 | 12 |
+## 6. 실행 순서
 
-AI 추천 세션은 검색 요청 대신 AI 추천 요청과 추천 카드 조회를 사용한다. 추천 결과 3권을 확인하더라도 API 요청 수와 상품 상세 조회 수를 구분하여 집계한다.
-
-### 5.4 가설 검증 기준
-
-첫 번째 Load와 Spike 실행 후 다음을 비교한다.
-
-- 실제 API별 요청 비율과 가설 비율
-- 검색·AI·홈 큐레이션별 p95/p99
-- 구매 전환율과 주문 생성 성공률
-- AI 요청이 전체 지연시간과 오류율에 미치는 영향
-
-결과가 확보되면 다음 테스트부터 사용자 비율과 요청 횟수를 수정한다. 첫 실행 전에는 위 가설값을 임의로 변경하지 않는다.
-
-## 6. SLI/SLO 판정 기준
-
-### Tier 1
-
-- 가용성 99.9% 이상
-- 800ms 이내 처리율 99% 이상
-- 주문 등 업무 성공률은 BusinessSuccess/BusinessRequest 기준 적용
-
-### Tier 2
-
-- 가용성 99.5% 이상
-- 1,000ms 이내 처리율 95% 이상
-
-공통으로 5xx·timeout, p50/p95/p99, DB connection pool·lock·slow query, AI 지연·실패, 테스트 종료 후 회복 여부를 확인한다.
-
-## 7. 실행 순서
-
-```text
-1. 테스트 계정·상품·주소 준비
-2. 사용자 플로우별 API와 요청 비율 확정
-3. Smoke로 각 플로우 정상 확인
-4. Load 20 → 50 → 100 VU 실행
-5. SLI/SLO 결과 확인
-6. Spike 50 → 200 VU 실행
-7. 필요할 때만 500 VU 단계 추가
-```
-
-## 8. API별 병목 벤치마크
-
-혼합 사용자 여정과 별도로 다음 API를 독립 측정한다. 상세 실행 조건과 명령은 `BENCHMARKS.md`를 따른다.
-
-| 시나리오 | 부하 단계 | 비교 조건 | 주요 측정값 |
-|---|---|---|---|
-| 상품 목록·인기순 | 50 → 100 → 300 → 500 VU | 동일 첫 페이지 | RPS, p50/p95/p99, 에러율 |
-| 검색 결과 | 50 → 100 → 300 → 500 VU | 동일·서로 다른 검색어 | RPS, p50/p95/p99, timeout율 |
-| 상품 상세 | 50 → 100 → 300 → 500 VU | 동일·서로 다른 상품 | RPS, p95/p99, 에러율 |
-| 동일 상품 주문 | 50·100·300 VU 개별 실행 | VU당 주문 1회 | TPS, p95/p99, 성공·실패율 |
-| 주문 상품 개수 | 1·10·30·50개 개별 실행 | 동일 동시 사용자 수 | TPS, p95/p99 |
-| AI 채팅 | 1·10·30·50 VU 개별 실행 | VU당 채팅 1회 | 평균, p95/p99, timeout/error율 |
-| 스냅샷 갱신 중 조회 | 50 VU 지속 | 갱신 전·중·후 | p95/p99 변화, DB 지표 |
-
-주문 생성은 현재 재고를 차감하지 않고 재고 수량만 검증한다. 동시 주문 테스트 후 주문 건수는 성공 수만큼 증가하고 상품 재고는 테스트 전후 동일해야 한다.
+1. 테스트 계정·상품·주소·재고·토큰을 준비한다.
+2. Health와 단일 API 요청으로 연결을 확인한다.
+3. Smoke를 실행한다.
+4. API별 상세 테스트를 실행한다.
+5. Load를 실행하고 SLO를 확인한다.
+6. 주문·AI·스냅샷 갱신 테스트를 실행한다.
+7. Spike를 실행하고 종료 후 회복 여부를 확인한다.
+8. 공통 결과 표와 인프라 지표를 정리한다.
