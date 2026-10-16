@@ -5,13 +5,6 @@ on:
     types: [dev-deploy]
   workflow_dispatch:
     inputs:
-      service:
-        description: ECS service to deploy
-        required: true
-        type: choice
-        options:
-          - backend
-          - ai
       release_tag:
         description: Release tag (for example v0.0.1234567890)
         required: true
@@ -40,8 +33,11 @@ jobs:
     name: Resolve Dev deployment
     runs-on: ubuntu-latest
     outputs:
+      manual: ${{ steps.input.outputs.manual }}
       service: ${{ steps.input.outputs.service }}
       sha: ${{ steps.input.outputs.sha }}
+      backend_sha: ${{ steps.input.outputs.backend_sha }}
+      ai_sha: ${{ steps.input.outputs.ai_sha }}
     steps:
       - name: Check out release manifest
         if: github.event_name == 'workflow_dispatch'
@@ -53,32 +49,62 @@ jobs:
         env:
           EVENT_SERVICE: ${{ github.event.client_payload.service }}
           EVENT_SHA: ${{ github.event.client_payload.sha }}
-          INPUT_SERVICE: ${{ inputs.service }}
           INPUT_RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           set -euo pipefail
           if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
             [[ "$GITHUB_REF" == "refs/heads/main" ]] || { echo "Manual deployment is allowed only from main" >&2; exit 1; }
-            service="$INPUT_SERVICE"
             tag="$INPUT_RELEASE_TAG"
-            [[ "$service" =~ ^(backend|ai)$ ]]
             [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
             manifest="releases/$tag.yml"
             [[ -f "$manifest" ]] || { echo "Release manifest not found: $manifest" >&2; exit 1; }
             manifest_tag="$(awk -F': *' '$1 == "release" {print $2}' "$manifest")"
             [[ "$manifest_tag" == "$tag" ]]
-            key="${service}_sha"
-            count="$(awk -F': *' -v key="$key" '$1 == key {count++} END {print count+0}' "$manifest")"
-            [[ "$count" == "1" ]]
-            sha="$(awk -F': *' -v key="$key" '$1 == key {print $2}' "$manifest")"
+            for service in backend ai; do
+              key="${service}_sha"
+              count="$(awk -F': *' -v key="$key" '$1 == key {count++} END {print count+0}' "$manifest")"
+              [[ "$count" -le 1 ]] || { echo "Duplicate $key entries in $manifest" >&2; exit 1; }
+              sha="$(awk -F': *' -v key="$key" '$1 == key {print $2}' "$manifest")"
+              if [[ -n "$sha" ]]; then
+                [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "Invalid $key in $manifest" >&2; exit 1; }
+                echo "${service}_sha=$sha" >> "$GITHUB_OUTPUT"
+              fi
+            done
+            backend_sha="$(awk -F': *' '$1 == "backend_sha" {print $2}' "$manifest")"
+            ai_sha="$(awk -F': *' '$1 == "ai_sha" {print $2}' "$manifest")"
+            [[ -n "$backend_sha" || -n "$ai_sha" ]] || { echo "Release manifest has no backend_sha or ai_sha" >&2; exit 1; }
+            echo "manual=true" >> "$GITHUB_OUTPUT"
+            echo "service=manual" >> "$GITHUB_OUTPUT"
+            echo "sha=" >> "$GITHUB_OUTPUT"
           else
             service="$EVENT_SERVICE"
             sha="$EVENT_SHA"
+            [[ "$service" =~ ^(frontend|backend|ai)$ ]]
+            [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
+            echo "manual=false" >> "$GITHUB_OUTPUT"
+            echo "service=$service" >> "$GITHUB_OUTPUT"
+            echo "sha=$sha" >> "$GITHUB_OUTPUT"
           fi
-          [[ "$service" =~ ^(frontend|backend|ai)$ ]]
-          [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
-          echo "service=$service" >> "$GITHUB_OUTPUT"
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Verify backend commit belongs to the backend repository
+        if: github.event_name == 'workflow_dispatch' && steps.input.outputs.backend_sha != ''
+        uses: actions/checkout@v4
+        with:
+          repository: 100-hours-a-week/KTB4-13th-BE
+          ref: ${{ steps.input.outputs.backend_sha }}
+          path: services/backend-source
+          token: ${{ secrets.SERVICE_REPO_READ_TOKEN }}
+          persist-credentials: false
+
+      - name: Verify AI commit belongs to the AI repository
+        if: github.event_name == 'workflow_dispatch' && steps.input.outputs.ai_sha != ''
+        uses: actions/checkout@v4
+        with:
+          repository: 100-hours-a-week/KTB4-13th-AI
+          ref: ${{ steps.input.outputs.ai_sha }}
+          path: services/ai-source
+          token: ${{ secrets.SERVICE_REPO_READ_TOKEN }}
+          persist-credentials: false
 
   deploy-frontend:
     name: Deploy Dev Frontend
@@ -123,9 +149,9 @@ jobs:
         run: bash scripts/deploy_frontend.sh services/frontend/dist "$FRONTEND_SHA" "$DEV_FRONTEND_BUCKET" "$DEV_CLOUDFRONT_DISTRIBUTION_ID"
 
   deploy-container:
-    name: Deploy Dev ECS Service
+    name: Deploy Dev ECS Service (automatic)
     needs: resolve
-    if: needs.resolve.outputs.service == 'backend' || needs.resolve.outputs.service == 'ai'
+    if: needs.resolve.outputs.manual == 'false' && (needs.resolve.outputs.service == 'backend' || needs.resolve.outputs.service == 'ai')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -142,3 +168,43 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
       - name: Deploy to ECS
         run: bash scripts/deploy_ecs_service_dev.sh "$SERVICE" "$SERVICE_SHA"
+
+  deploy-manual-backend:
+    name: Deploy Dev Backend from Release
+    needs: resolve
+    if: needs.resolve.outputs.manual == 'true' && needs.resolve.outputs.backend_sha != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_CD_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Deploy backend image to backend ECS service
+        env:
+          SERVICE_SHA: ${{ needs.resolve.outputs.backend_sha }}
+        run: bash scripts/deploy_ecs_service_dev.sh backend "$SERVICE_SHA"
+
+  deploy-manual-ai:
+    name: Deploy Dev AI from Release
+    needs: resolve
+    if: needs.resolve.outputs.manual == 'true' && needs.resolve.outputs.ai_sha != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_CD_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Deploy AI image to AI ECS service
+        env:
+          SERVICE_SHA: ${{ needs.resolve.outputs.ai_sha }}
+        run: bash scripts/deploy_ecs_service_dev.sh ai "$SERVICE_SHA"
