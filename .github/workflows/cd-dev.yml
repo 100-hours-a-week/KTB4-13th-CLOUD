@@ -3,6 +3,19 @@ name: Dev Deployment
 on:
   repository_dispatch:
     types: [dev-deploy]
+  workflow_dispatch:
+    inputs:
+      service:
+        description: ECS service to deploy
+        required: true
+        type: choice
+        options:
+          - backend
+          - ai
+      release_tag:
+        description: Release tag (for example v0.0.1234567890)
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -30,14 +43,38 @@ jobs:
       service: ${{ steps.input.outputs.service }}
       sha: ${{ steps.input.outputs.sha }}
     steps:
+      - name: Check out release manifest
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
       - id: input
         env:
           EVENT_SERVICE: ${{ github.event.client_payload.service }}
           EVENT_SHA: ${{ github.event.client_payload.sha }}
+          INPUT_SERVICE: ${{ inputs.service }}
+          INPUT_RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           set -euo pipefail
-          service="$EVENT_SERVICE"
-          sha="$EVENT_SHA"
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            [[ "$GITHUB_REF" == "refs/heads/main" ]] || { echo "Manual deployment is allowed only from main" >&2; exit 1; }
+            service="$INPUT_SERVICE"
+            tag="$INPUT_RELEASE_TAG"
+            [[ "$service" =~ ^(backend|ai)$ ]]
+            [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+            manifest="releases/$tag.yml"
+            [[ -f "$manifest" ]] || { echo "Release manifest not found: $manifest" >&2; exit 1; }
+            manifest_tag="$(awk -F': *' '$1 == "release" {print $2}' "$manifest")"
+            [[ "$manifest_tag" == "$tag" ]]
+            key="${service}_sha"
+            count="$(awk -F': *' -v key="$key" '$1 == key {count++} END {print count+0}' "$manifest")"
+            [[ "$count" == "1" ]]
+            sha="$(awk -F': *' -v key="$key" '$1 == key {print $2}' "$manifest")"
+          else
+            service="$EVENT_SERVICE"
+            sha="$EVENT_SHA"
+          fi
           [[ "$service" =~ ^(frontend|backend|ai)$ ]]
           [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
           echo "service=$service" >> "$GITHUB_OUTPUT"
