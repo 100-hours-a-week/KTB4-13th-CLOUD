@@ -78,8 +78,21 @@ aws ecs update-service \
 
 echo "Waiting for $ecs_service to reach a stable state..."
 aws ecs wait services-stable --cluster "$cluster" --services "$ecs_service"
-aws ecs describe-services \
+final_service_json="$(aws ecs describe-services \
   --cluster "$cluster" \
   --services "$ecs_service" \
-  --query 'services[0].{name:serviceName,status:status,taskDefinition:taskDefinition,desired:desiredCount,running:runningCount,deployments:deployments[].{status:status,rolloutState:rolloutState,taskDefinition:taskDefinition,desired:desiredCount,running:runningCount}}' \
-  --output json
+  --output json)"
+final_task_definition="$(jq -r '.services[0].taskDefinition // empty' <<<"$final_service_json")"
+primary_rollout_state="$(jq -r '.services[0].deployments[]? | select(.status == "PRIMARY") | .rolloutState // empty' <<<"$final_service_json")"
+
+if [[ "$final_task_definition" != "$new_task_definition" || "$primary_rollout_state" != "COMPLETED" ]]; then
+  echo "ECS deployment did not complete on the requested task definition." >&2
+  echo "Requested: $new_task_definition" >&2
+  echo "Current:   ${final_task_definition:-<missing>}" >&2
+  echo "PRIMARY rollout state: ${primary_rollout_state:-<missing>}" >&2
+  echo "ECS may have automatically rolled back to the previous revision." >&2
+  jq -r '.failures[]?.reason' <<<"$final_service_json" >&2
+  exit 1
+fi
+
+jq '{name: .services[0].serviceName, status: .services[0].status, taskDefinition: .services[0].taskDefinition, desired: .services[0].desiredCount, running: .services[0].runningCount, deployments: [.services[0].deployments[] | {status, rolloutState, taskDefinition, desired: .desiredCount, running: .runningCount}]}' <<<"$final_service_json"
