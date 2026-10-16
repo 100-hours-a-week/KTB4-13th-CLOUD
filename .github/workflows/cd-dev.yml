@@ -15,8 +15,6 @@ concurrency:
 env:
   AWS_REGION: ${{ vars.AWS_REGION }}
   AWS_CD_ROLE_ARN: ${{ vars.AWS_CD_ROLE_ARN }}
-  DEV_AI_INSTANCE_ID: ${{ vars.DEV_AI_INSTANCE_ID }}
-  DEV_BACKEND_INSTANCE_ID: ${{ vars.DEV_BACKEND_INSTANCE_ID }}
   DEV_FRONTEND_BUCKET: ${{ vars.DEV_FRONTEND_BUCKET }}
   DEV_CLOUDFRONT_DISTRIBUTION_ID: ${{ vars.DEV_CLOUDFRONT_DISTRIBUTION_ID }}
   DEV_API_BASE_URL: ${{ vars.DEV_API_BASE_URL }}
@@ -37,6 +35,7 @@ jobs:
           EVENT_SERVICE: ${{ github.event.client_payload.service }}
           EVENT_SHA: ${{ github.event.client_payload.sha }}
         run: |
+          set -euo pipefail
           service="$EVENT_SERVICE"
           sha="$EVENT_SHA"
           [[ "$service" =~ ^(frontend|backend|ai)$ ]]
@@ -87,10 +86,11 @@ jobs:
         run: bash scripts/deploy_frontend.sh services/frontend/dist "$FRONTEND_SHA" "$DEV_FRONTEND_BUCKET" "$DEV_CLOUDFRONT_DISTRIBUTION_ID"
 
   deploy-container:
-    name: Deploy Dev Container
+    name: Deploy Dev ECS Service
     needs: resolve
     if: needs.resolve.outputs.service == 'backend' || needs.resolve.outputs.service == 'ai'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
       SERVICE: ${{ needs.resolve.outputs.service }}
       SERVICE_SHA: ${{ needs.resolve.outputs.sha }}
@@ -103,36 +103,5 @@ jobs:
         with:
           role-to-assume: ${{ env.AWS_CD_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
-      - name: Resolve deployment parameters
-        id: params
-        run: |
-          if [ "$SERVICE" = ai ]; then
-            repository=bookjeok-ai
-            instance="$DEV_AI_INSTANCE_ID"
-            directory=/opt/bookjeok-ai-dev
-            compose_service=ai-server
-            health=http://127.0.0.1:8000/health
-          else
-            repository=bookjeok-be
-            instance="$DEV_BACKEND_INSTANCE_ID"
-            directory=/opt/bookjeok-dev
-            compose_service=backend
-            health=http://127.0.0.1:8080/actuator/health
-          fi
-          digest=$(aws ecr describe-images --repository-name "$repository" --image-ids "imageTag=$SERVICE_SHA" --query 'imageDetails[0].imageDigest' --output text)
-          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-          echo "instance=$instance" >> "$GITHUB_OUTPUT"
-          echo "directory=$directory" >> "$GITHUB_OUTPUT"
-          echo "compose_service=$compose_service" >> "$GITHUB_OUTPUT"
-          echo "health=$health" >> "$GITHUB_OUTPUT"
-          echo "image=$ECR_REGISTRY/$repository@$digest" >> "$GITHUB_OUTPUT"
-      - name: Deploy through SSM
-        run: |
-          bash scripts/send-ssm.sh "${{ steps.params.outputs.instance }}" \
-            scripts/deploy_service_dev.sh \
-            "${{ steps.params.outputs.directory }}" \
-            docker-compose.yml \
-            "${{ steps.params.outputs.compose_service }}" \
-            "${{ steps.params.outputs.image }}" \
-            "$AWS_REGION" "$ECR_REGISTRY" \
-            "${{ steps.params.outputs.health }}"
+      - name: Deploy to ECS
+        run: bash scripts/deploy_ecs_service_dev.sh "$SERVICE" "$SERVICE_SHA"
