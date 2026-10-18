@@ -76,23 +76,52 @@ aws ecs update-service \
   --query 'service.{name:serviceName,status:status,taskDefinition:taskDefinition,desired:desiredCount,running:runningCount}' \
   --output json
 
-echo "Waiting for $ecs_service to reach a stable state..."
-aws ecs wait services-stable --cluster "$cluster" --services "$ecs_service"
-final_service_json="$(aws ecs describe-services \
-  --cluster "$cluster" \
-  --services "$ecs_service" \
-  --output json)"
-final_task_definition="$(jq -r '.services[0].taskDefinition // empty' <<<"$final_service_json")"
-primary_rollout_state="$(jq -r '.services[0].deployments[]? | select(.status == "PRIMARY") | .rolloutState // empty' <<<"$final_service_json")"
+# The CLI services-stable waiter checks task counts, not rolloutState. ECS can
+# report one healthy deployment while its rollout is still IN_PROGRESS.
+echo "Waiting for $ecs_service to complete the requested deployment..."
+deadline=$((SECONDS + 1200))
+observed_requested=false
+while (( SECONDS < deadline )); do
+  final_service_json="$(aws ecs describe-services \
+    --cluster "$cluster" --services "$ecs_service" --output json)"
+  if ! jq -e '.failures | length == 0' <<< "$final_service_json" >/dev/null; then
+    echo "Could not describe ECS service $ecs_service" >&2
+    jq '.failures' <<< "$final_service_json" >&2
+    exit 1
+  fi
+  if jq -e --arg requested "$new_task_definition" \
+    '.services[0].deployments[]? | select(.taskDefinition == $requested)' \
+    <<< "$final_service_json" >/dev/null; then
+    observed_requested=true
+  fi
+  if jq -e --arg requested "$new_task_definition" '
+    .services[0] | .taskDefinition == $requested and
+    (.deployments | length) == 1 and
+    .deployments[0].status == "PRIMARY" and
+    .deployments[0].taskDefinition == $requested and
+    .deployments[0].rolloutState == "COMPLETED" and
+    .runningCount == .desiredCount and .pendingCount == 0
+  ' <<< "$final_service_json" >/dev/null; then
+    echo "ECS deployment completed on $new_task_definition"
+    jq '.services[0] | {serviceName, taskDefinition, desiredCount, runningCount, pendingCount}' <<< "$final_service_json"
+    exit 0
+  fi
+  if jq -e --arg requested "$new_task_definition" \
+    '.services[0].deployments[]? | select(.taskDefinition == $requested and .rolloutState == "FAILED")' \
+    <<< "$final_service_json" >/dev/null; then
+    echo "Requested ECS deployment failed; check circuit-breaker rollback." >&2
+    break
+  fi
+  if [[ "$observed_requested" == true ]] && jq -e --arg requested "$new_task_definition" '
+    .services[0] | .taskDefinition != $requested and
+    ([.deployments[]? | select(.taskDefinition == $requested)] | length) == 0
+  ' <<< "$final_service_json" >/dev/null; then
+    echo "Requested ECS deployment was rolled back or superseded." >&2
+    break
+  fi
+  sleep 15
+done
 
-if [[ "$final_task_definition" != "$new_task_definition" || "$primary_rollout_state" != "COMPLETED" ]]; then
-  echo "ECS deployment did not complete on the requested task definition." >&2
-  echo "Requested: $new_task_definition" >&2
-  echo "Current:   ${final_task_definition:-<missing>}" >&2
-  echo "PRIMARY rollout state: ${primary_rollout_state:-<missing>}" >&2
-  echo "ECS may have automatically rolled back to the previous revision." >&2
-  jq -r '.failures[]?.reason' <<<"$final_service_json" >&2
-  exit 1
-fi
-
-jq '{name: .services[0].serviceName, status: .services[0].status, taskDefinition: .services[0].taskDefinition, desired: .services[0].desiredCount, running: .services[0].runningCount, deployments: [.services[0].deployments[] | {status, rolloutState, taskDefinition, desired: .desiredCount, running: .runningCount}]}' <<<"$final_service_json"
+echo "ECS deployment did not complete within its 20-minute wait budget or failed." >&2
+jq '.services[0] | {taskDefinition, desiredCount, runningCount, pendingCount, deployments, recentEvents: .events[:10]}' <<< "$final_service_json" >&2
+exit 1
