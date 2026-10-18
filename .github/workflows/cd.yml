@@ -61,13 +61,11 @@ jobs:
     name: Deploy release
     needs: verify-release
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 75
     environment: production
     env:
       AWS_REGION: ${{ vars.AWS_REGION }}
       AWS_CD_ROLE_ARN: ${{ vars.AWS_CD_ROLE_ARN }}
-      BACKEND_INSTANCE_ID: i-02549e178513b10b4
-      AI_INSTANCE_ID: i-062ff04c0548849bd
       FRONTEND_BUCKET: bookjeok-fe
       CLOUDFRONT_DISTRIBUTION_ID: E18E0FGBK8ZS49
 
@@ -137,11 +135,15 @@ jobs:
 
       - name: Deploy AI
         run: |
-          bash scripts/send-ssm.sh "$AI_INSTANCE_ID" scripts/deploy_ai.sh /opt/bookjeok-ai docker-compose.yml ai-server "${{ steps.images.outputs.ai_image }}" "${{ needs.verify-release.outputs.ai_sha }}" "$AWS_REGION" "522688057030.dkr.ecr.${AWS_REGION}.amazonaws.com" http://10.0.1.56:8000/health
+          bash scripts/deploy_ecs_service_prod.sh ai \
+            "${{ steps.images.outputs.ai_image }}" \
+            "${{ needs.verify-release.outputs.ai_sha }}"
 
       - name: Deploy Backend
         run: |
-          bash scripts/send-ssm.sh "$BACKEND_INSTANCE_ID" scripts/deploy_backend.sh /opt/bookjeok docker-compose.yml app "${{ steps.images.outputs.backend_image }}" "${{ needs.verify-release.outputs.backend_sha }}" "$AWS_REGION" "522688057030.dkr.ecr.${AWS_REGION}.amazonaws.com" http://127.0.0.1:8080/actuator/health
+          bash scripts/deploy_ecs_service_prod.sh backend \
+            "${{ steps.images.outputs.backend_image }}" \
+            "${{ needs.verify-release.outputs.backend_sha }}"
 
       - name: Deploy Frontend
         run: |
