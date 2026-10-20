@@ -118,11 +118,17 @@ task_definition_input=$(jq -c \
   ' <<< "$task_definition_json")
 
 tags=$(jq -c '.tags // []' <<< "$task_definition_json")
-new_task_definition=$(aws ecs register-task-definition \
-  --region "$AWS_REGION" \
-  --cli-input-json "$task_definition_input" \
-  --tags "$tags" \
-  --output json)
+register_args=(
+  --region "$AWS_REGION"
+  --cli-input-json "$task_definition_input"
+  --output json
+)
+# ECS rejects an explicitly empty --tags list. Omit the option when the source
+# task definition has no tags; preserve existing tags when there are any.
+if [ "$(jq 'length' <<< "$tags")" -gt 0 ]; then
+  register_args+=(--tags "$tags")
+fi
+new_task_definition=$(aws ecs register-task-definition "${register_args[@]}")
 new_task_definition_arn=$(jq -er '.taskDefinition.taskDefinitionArn' <<< "$new_task_definition")
 
 echo "${component} 이미지와 SHA가 해당 ECS 서비스에만 연결됩니다: $service_name ($release_sha)"
