@@ -136,7 +136,13 @@ jobs:
           VITE_API_BASE_URL: ${{ env.DEV_API_BASE_URL }}
           VITE_KAKAO_REDIRECT_URI: ${{ env.DEV_KAKAO_REDIRECT_URI }}
           VITE_KAKAO_REST_API_KEY: ${{ env.DEV_KAKAO_REST_API_KEY }}
+          VITE_TOSS_CLIENT_KEY: ${{ vars.DEV_VITE_TOSS_CLIENT_KEY }}
         run: |
+          set -euo pipefail
+          if [[ -z "$VITE_TOSS_CLIENT_KEY" ]]; then
+            echo "::error::Set the DEV_VITE_TOSS_CLIENT_KEY repository variable before deploying the development frontend."
+            exit 1
+          fi
           npm ci
           npm run lint
           npm run build -- --base="/releases/$FRONTEND_SHA/"
