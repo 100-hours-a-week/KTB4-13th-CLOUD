@@ -75,22 +75,6 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Check out Backend
-        uses: actions/checkout@v4
-        with:
-          repository: 100-hours-a-week/KTB4-13th-BE
-          ref: ${{ needs.verify-release.outputs.backend_sha }}
-          path: services/backend
-          persist-credentials: false
-
-      - name: Check out AI
-        uses: actions/checkout@v4
-        with:
-          repository: 100-hours-a-week/KTB4-13th-AI
-          ref: ${{ needs.verify-release.outputs.ai_sha }}
-          path: services/ai
-          persist-credentials: false
-
       - name: Check out Frontend
         uses: actions/checkout@v4
         with:
@@ -98,6 +82,13 @@ jobs:
           ref: ${{ needs.verify-release.outputs.frontend_sha }}
           path: services/frontend
           persist-credentials: false
+
+      - name: Set up Node.js with npm cache
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: services/frontend/package-lock.json
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -127,9 +118,14 @@ jobs:
           SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
           VITE_API_BASE_URL: ${{ vars.API_BASE_URL }}
           VITE_KAKAO_REDIRECT_URI: ${{ vars.KAKAO_REDIRECT_URI }}
-          VITE_KAKAO_REST_API_KEY: ${{ vars.KAKAO_REST_API_KEY }}
+          VITE_KAKAO_REST_API_KEY: ${{ secrets.KAKAO_REST_API_KEY }}
+          VITE_TOSS_CLIENT_KEY: ${{ vars.VITE_TOSS_CLIENT_KEY }}
         run: |
-          npm ci
+          if [ -z "$VITE_KAKAO_REST_API_KEY" ] || [ -z "$VITE_TOSS_CLIENT_KEY" ]; then
+            echo 'Required Kakao/Toss frontend build variables are not configured.' >&2
+            exit 1
+          fi
+          npm ci --prefer-offline
           npm run lint
           npm run build -- --base="/releases/${{ needs.verify-release.outputs.frontend_sha }}/"
 
