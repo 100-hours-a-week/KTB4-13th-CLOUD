@@ -45,14 +45,16 @@ jobs:
           else
             release_tag="$GITHUB_REF_NAME"
           fi
+          [[ "$release_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Invalid release tag" >&2; exit 1; }
           echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
 
       - name: Verify release manifest
         id: release
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.release_tag }}
         run: |
           values=$(bash scripts/verify-release.sh \
-            "releases/${{ steps.tag.outputs.release_tag }}.yml" \
-            "${{ steps.tag.outputs.release_tag }}")
+            "releases/$RELEASE_TAG.yml" "$RELEASE_TAG")
           while IFS='=' read -r key value; do
             echo "$key=$value" >> "$GITHUB_OUTPUT"
           done <<< "$values"
@@ -70,6 +72,10 @@ jobs:
       CLOUDFRONT_DISTRIBUTION_ID: E18E0FGBK8ZS49
 
     steps:
+      - name: Start deployment timer
+        id: timer
+        run: echo "started=$(date +%s)" >> "$GITHUB_OUTPUT"
+
       - name: Check out Cloud repository
         uses: actions/checkout@v4
         with:
@@ -82,13 +88,6 @@ jobs:
           ref: ${{ needs.verify-release.outputs.frontend_sha }}
           path: services/frontend
           persist-credentials: false
-
-      - name: Set up Node.js with npm cache
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: services/frontend/package-lock.json
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -107,6 +106,12 @@ jobs:
           echo "backend_image=$registry/bookjeok-be@$backend_digest" >> "$GITHUB_OUTPUT"
           echo "ai_image=$registry/bookjeok-ai@$ai_digest" >> "$GITHUB_OUTPUT"
 
+      - name: Set up Node.js with npm cache
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: services/frontend/package-lock.json
       - name: Build Frontend release
         working-directory: services/frontend
         env:
@@ -129,21 +134,30 @@ jobs:
           npm run lint
           npm run build -- --base="/releases/${{ needs.verify-release.outputs.frontend_sha }}/"
 
-      - name: Deploy AI
+      - name: Deploy ECS services
+        env:
+          AI_IMAGE: ${{ steps.images.outputs.ai_image }}
+          AI_SHA: ${{ needs.verify-release.outputs.ai_sha }}
+          BACKEND_IMAGE: ${{ steps.images.outputs.backend_image }}
+          BACKEND_SHA: ${{ needs.verify-release.outputs.backend_sha }}
         run: |
-          bash scripts/deploy_ecs_service_prod.sh ai \
-            "${{ steps.images.outputs.ai_image }}" \
-            "${{ needs.verify-release.outputs.ai_sha }}"
-
-      - name: Deploy Backend
-        run: |
-          bash scripts/deploy_ecs_service_prod.sh backend \
-            "${{ steps.images.outputs.backend_image }}" \
-            "${{ needs.verify-release.outputs.backend_sha }}"
+          bash scripts/deploy_prod_services.sh \
+            "$AI_IMAGE" "$AI_SHA" "$BACKEND_IMAGE" "$BACKEND_SHA"
 
       - name: Deploy Frontend
         run: |
           bash scripts/deploy_frontend.sh services/frontend/dist "${{ needs.verify-release.outputs.frontend_sha }}" "$FRONTEND_BUCKET" "$CLOUDFRONT_DISTRIBUTION_ID"
+
+      - name: Summarize deployment duration
+        if: always()
+        env:
+          STARTED: ${{ steps.timer.outputs.started }}
+          DEPLOY_STATUS: ${{ job.status }}
+        run: |
+          if [[ "$STARTED" =~ ^[0-9]+$ ]]; then
+            elapsed=$(( $(date +%s) - STARTED ))
+            printf '\nDeployment job elapsed: %ss; result: %s\n' "$elapsed" "$DEPLOY_STATUS" >> "$GITHUB_STEP_SUMMARY"
+          fi
 
   notify-failure:
     name: Notify deployment failure

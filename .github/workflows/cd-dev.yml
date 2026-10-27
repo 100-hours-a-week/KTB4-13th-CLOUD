@@ -14,10 +14,6 @@ permissions:
   contents: read
   id-token: write
 
-concurrency:
-  group: dev-deployment
-  cancel-in-progress: false
-
 env:
   AWS_REGION: ${{ vars.AWS_REGION }}
   AWS_CD_ROLE_ARN: ${{ vars.AWS_CD_ROLE_ARN }}
@@ -38,6 +34,7 @@ jobs:
       sha: ${{ steps.input.outputs.sha }}
       backend_sha: ${{ steps.input.outputs.backend_sha }}
       ai_sha: ${{ steps.input.outputs.ai_sha }}
+      deployments: ${{ steps.deployments.outputs.matrix }}
     steps:
       - name: Check out release manifest
         if: github.event_name == 'workflow_dispatch'
@@ -106,7 +103,28 @@ jobs:
           token: ${{ secrets.SERVICE_REPO_READ_TOKEN }}
           persist-credentials: false
 
+      - name: Resolve ECS deployment targets
+        id: deployments
+        env:
+          MANUAL: ${{ steps.input.outputs.manual }}
+          SERVICE: ${{ steps.input.outputs.service }}
+          SERVICE_SHA: ${{ steps.input.outputs.sha }}
+          BACKEND_SHA: ${{ steps.input.outputs.backend_sha }}
+          AI_SHA: ${{ steps.input.outputs.ai_sha }}
+        run: |
+          targets=$(jq -cn \
+            --arg manual "$MANUAL" --arg service "$SERVICE" --arg sha "$SERVICE_SHA" \
+            --arg backend "$BACKEND_SHA" --arg ai "$AI_SHA" '
+              {include: (if $manual == "true" then
+                [{service: "backend", sha: $backend}, {service: "ai", sha: $ai}]
+              else [{service: $service, sha: $sha}] end
+              | map(select((.service == "backend" or .service == "ai") and .sha != "")))}')
+          echo "matrix=$targets" >> "$GITHUB_OUTPUT"
+
   deploy-frontend:
+    concurrency:
+      group: dev-deploy-frontend
+      cancel-in-progress: false
     name: Deploy Dev Frontend
     needs: resolve
     if: needs.resolve.outputs.service == 'frontend'
@@ -143,7 +161,7 @@ jobs:
             echo "::error::Set the DEV_VITE_TOSS_CLIENT_KEY repository variable before deploying the development frontend."
             exit 1
           fi
-          npm ci
+          npm ci --prefer-offline
           npm run lint
           npm run build -- --base="/releases/$FRONTEND_SHA/"
       - name: Configure AWS credentials
@@ -155,14 +173,20 @@ jobs:
         run: bash scripts/deploy_frontend.sh services/frontend/dist "$FRONTEND_SHA" "$DEV_FRONTEND_BUCKET" "$DEV_CLOUDFRONT_DISTRIBUTION_ID"
 
   deploy-container:
-    name: Deploy Dev ECS Service (automatic)
+    name: Deploy Dev ECS (${{ matrix.service }})
     needs: resolve
-    if: needs.resolve.outputs.manual == 'false' && (needs.resolve.outputs.service == 'backend' || needs.resolve.outputs.service == 'ai')
+    if: needs.resolve.outputs.service != 'frontend'
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.resolve.outputs.deployments) }}
+    concurrency:
+      group: dev-deploy-${{ matrix.service }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      SERVICE: ${{ needs.resolve.outputs.service }}
-      SERVICE_SHA: ${{ needs.resolve.outputs.sha }}
+      SERVICE: ${{ matrix.service }}
+      SERVICE_SHA: ${{ matrix.sha }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -174,43 +198,3 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
       - name: Deploy to ECS
         run: bash scripts/deploy_ecs_service_dev.sh "$SERVICE" "$SERVICE_SHA"
-
-  deploy-manual-backend:
-    name: Deploy Dev Backend from Release
-    needs: resolve
-    if: needs.resolve.outputs.manual == 'true' && needs.resolve.outputs.backend_sha != ''
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ env.AWS_CD_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
-      - name: Deploy backend image to backend ECS service
-        env:
-          SERVICE_SHA: ${{ needs.resolve.outputs.backend_sha }}
-        run: bash scripts/deploy_ecs_service_dev.sh backend "$SERVICE_SHA"
-
-  deploy-manual-ai:
-    name: Deploy Dev AI from Release
-    needs: resolve
-    if: needs.resolve.outputs.manual == 'true' && needs.resolve.outputs.ai_sha != ''
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ env.AWS_CD_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
-      - name: Deploy AI image to AI ECS service
-        env:
-          SERVICE_SHA: ${{ needs.resolve.outputs.ai_sha }}
-        run: bash scripts/deploy_ecs_service_dev.sh ai "$SERVICE_SHA"

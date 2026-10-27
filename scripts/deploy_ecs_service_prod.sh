@@ -11,6 +11,17 @@ component=$1
 image_uri=$2
 release_sha=$3
 cluster_name=prod-ecs-cluster
+started_seconds=$SECONDS
+deployment_result=failed
+report_result() {
+  local exit_status=$?
+  if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+    printf '| %s | %s | %ss | %s |\n' \
+      "$component" "$deployment_result" "$((SECONDS - started_seconds))" "$release_sha" >> "$GITHUB_STEP_SUMMARY"
+  fi
+  return "$exit_status"
+}
+trap report_result EXIT
 
 case "$component" in
   backend)
@@ -82,6 +93,7 @@ if ! jq -e --arg family "$expected_family" '
   (.deployments | length) == 1 and
   .deployments[0].status == "PRIMARY" and
   .deployments[0].rolloutState == "COMPLETED" and
+  .desiredCount > 0 and
   .pendingCount == 0 and
   .runningCount == .desiredCount
 ' <<< "$service" >/dev/null; then
@@ -103,6 +115,16 @@ container_count=$(jq --arg name "$container_name" \
 if [ "$container_count" -ne 1 ]; then
   echo "Task definition에서 대상 컨테이너를 하나로 특정하지 못했습니다: $container_name" >&2
   exit 1
+fi
+
+# Only skip after verifying that the existing service is healthy and stable.
+current_image=$(jq -r --arg name "$container_name" \
+  '.taskDefinition.containerDefinitions[] | select(.name == $name) | .image' \
+  <<< "$task_definition_json")
+if [ "$current_image" = "$image_uri" ]; then
+  deployment_result=unchanged
+  echo "${component}: stable service already uses the requested digest; skipping deployment."
+  exit 0
 fi
 
 task_definition_input=$(jq -c \
@@ -164,10 +186,12 @@ for attempt in $(seq 1 120); do
 
   if [ "$primary_task_definition" = "$new_task_definition_arn" ] \
     && [ "$primary_rollout_state" = COMPLETED ] \
+    && [ "$desired_count" -gt 0 ] \
     && [ "$running_count" -eq "$desired_count" ] \
     && [ "$pending_count" -eq 0 ] \
     && [ "$(jq '.deployments | length' <<< "$current_service")" -eq 1 ]; then
     echo "${component} ECS 배포가 안정 상태에 도달했습니다: $service_name"
+    deployment_result=deployed
     exit 0
   fi
 
