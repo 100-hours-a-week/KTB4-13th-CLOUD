@@ -1,0 +1,27 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: dev-backend
+  namespace: argocd
+spec:
+  project: bookjeok-dev
+  source:
+    repoURL: https://github.com/100-hours-a-week/KTB4-13th-Cloud.git
+    targetRevision: main
+    path: gitops/charts/application
+    helm:
+      releaseName: dev-backend
+      valueFiles:
+      - ../../environments/dev/backend.values.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: dev
+  syncPolicy:
+    syncOptions:
+    - RespectIgnoreDifferences=true
+  ignoreDifferences:
+  - group: apps
+    kind: Deployment
+    name: dev-backend
+    jsonPointers:
+    - /spec/replicas

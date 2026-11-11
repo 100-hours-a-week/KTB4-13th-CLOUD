@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": [
+    "name",
+    "container",
+    "selectorLabels",
+    "podSpec"
+  ],
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "container": {
+      "type": "object",
+      "required": [
+        "name",
+        "image",
+        "resources"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "image": {
+          "type": "string",
+          "pattern": "@sha256:[a-f0-9]{64}$"
+        }
+      }
+    },
+    "replicaCount": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "selectorLabels": {
+      "type": "object",
+      "minProperties": 1
+    },
+    "podSpec": {
+      "type": "object"
+    }
+  }
+}

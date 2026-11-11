@@ -1,0 +1,225 @@
+name: dev-backend
+labels:
+  app.kubernetes.io/name: dev-backend
+  app.kubernetes.io/part-of: bookjeok
+selectorLabels:
+  app.kubernetes.io/name: dev-backend
+replicaCount: 1
+strategy:
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0
+  type: RollingUpdate
+podAnnotations: {}
+podSpec:
+  automountServiceAccountToken: false
+  dnsPolicy: ClusterFirst
+  restartPolicy: Always
+  schedulerName: default-scheduler
+  securityContext: {}
+  serviceAccount: dev-backend
+  serviceAccountName: dev-backend
+  terminationGracePeriodSeconds: 60
+container:
+  env:
+  - name: SERVER_SHUTDOWN
+    value: graceful
+  - name: SPRING_LIFECYCLE_TIMEOUT_PER_SHUTDOWN_PHASE
+    value: 30s
+  - name: APP_MEMORYEXTRACTION_ENABLED
+    value: 'true'
+  - name: AGENTCHAT_ENABLED
+    value: 'true'
+  - name: DB_USERNAME
+    valueFrom:
+      secretKeyRef:
+        key: DB_USERNAME
+        name: dev-backend-config
+  - name: JWT_SECRET
+    valueFrom:
+      secretKeyRef:
+        key: JWT_SECRET
+        name: dev-backend-config
+  - name: KAKAO_REDIRECT_URI
+    valueFrom:
+      secretKeyRef:
+        key: KAKAO_REDIRECT_URI
+        name: dev-backend-config
+  - name: KAKAO_REST_API_KEY
+    valueFrom:
+      secretKeyRef:
+        key: KAKAO_REST_API_KEY
+        name: dev-backend-config
+  - name: TOSS_PAYMENTS_SECRET_KEY
+    valueFrom:
+      secretKeyRef:
+        key: TOSS_PAYMENTS_SECRET_KEY
+        name: dev-backend-config
+  - name: AI_SERVICE_TOKEN
+    valueFrom:
+      secretKeyRef:
+        key: AI_SERVICE_TOKEN
+        name: dev-backend-config
+  - name: AUTH_COOKIE_SECURE
+    valueFrom:
+      secretKeyRef:
+        key: AUTH_COOKIE_SECURE
+        name: dev-backend-config
+  - name: DB_URL
+    valueFrom:
+      secretKeyRef:
+        key: DB_URL
+        name: dev-backend-config
+  - name: FRONTEND_ORIGIN
+    valueFrom:
+      secretKeyRef:
+        key: FRONTEND_ORIGIN
+        name: dev-backend-config
+  - name: TOSS_PAYMENTS_BASE_URL
+    valueFrom:
+      secretKeyRef:
+        key: TOSS_PAYMENTS_BASE_URL
+        name: dev-backend-config
+  - name: AI_BASE_URL
+    value: http://dev-ai.dev.svc.cluster.local:8000
+  - name: DB_PASSWORD
+    valueFrom:
+      secretKeyRef:
+        key: DB_PASSWORD
+        name: dev-backend-config
+  envFrom:
+  - secretRef:
+      name: dev-backend-config
+  image: 522688057030.dkr.ecr.ap-northeast-2.amazonaws.com/bookjeok-be@sha256:d358c1e0623f89ed25272e8a0a0ceb529b3dc416b492728f6a1afe14c7e5930e
+  imagePullPolicy: IfNotPresent
+  lifecycle:
+    preStop:
+      exec:
+        command:
+        - /bin/sh
+        - -c
+        - sleep 10
+  livenessProbe:
+    failureThreshold: 3
+    httpGet:
+      path: /actuator/health/liveness
+      port: http
+      scheme: HTTP
+    periodSeconds: 10
+    successThreshold: 1
+    timeoutSeconds: 2
+  name: backend
+  ports:
+  - containerPort: 8080
+    name: http
+    protocol: TCP
+  readinessProbe:
+    failureThreshold: 2
+    httpGet:
+      path: /actuator/health/readiness
+      port: http
+      scheme: HTTP
+    periodSeconds: 5
+    successThreshold: 1
+    timeoutSeconds: 2
+  resources:
+    limits:
+      cpu: 500m
+      memory: 500Mi
+    requests:
+      cpu: 250m
+      memory: 500Mi
+  startupProbe:
+    failureThreshold: 60
+    httpGet:
+      path: /actuator/health/liveness
+      port: http
+      scheme: HTTP
+    periodSeconds: 5
+    successThreshold: 1
+    timeoutSeconds: 2
+  terminationMessagePath: /dev/termination-log
+  terminationMessagePolicy: File
+service:
+  enabled: true
+  labels:
+    app.kubernetes.io/name: dev-backend
+    app.kubernetes.io/part-of: bookjeok
+  spec:
+    externalTrafficPolicy: Cluster
+    ports:
+    - nodePort: 32719
+      port: 8080
+      protocol: TCP
+      targetPort: 8080
+    selector:
+      app.kubernetes.io/name: dev-backend
+    sessionAffinity: None
+    type: NodePort
+serviceAccount:
+  create: true
+  automountServiceAccountToken: false
+externalSecret:
+  enabled: true
+  spec:
+    data:
+    - remoteRef:
+        key: /bookjeok/dev/AI_BASE_URL
+      secretKey: AI_BASE_URL
+    - remoteRef:
+        key: /bookjeok/common/AI_SERVICE_TOKEN
+      secretKey: AI_SERVICE_TOKEN
+    - remoteRef:
+        key: /bookjeok/dev/AUTH_COOKIE_SECURE
+      secretKey: AUTH_COOKIE_SECURE
+    - remoteRef:
+        key: /bookjeok/dev/DB_PASSWORD
+      secretKey: DB_PASSWORD
+    - remoteRef:
+        key: /bookjeok/dev/DB_URL
+      secretKey: DB_URL
+    - remoteRef:
+        key: /bookjeok/dev/DB_USERNAME
+      secretKey: DB_USERNAME
+    - remoteRef:
+        key: /bookjeok/dev/FRONTEND_ORIGIN
+      secretKey: FRONTEND_ORIGIN
+    - remoteRef:
+        key: /bookjeok/dev/KAKAO_REDIRECT_URI
+      secretKey: KAKAO_REDIRECT_URI
+    - remoteRef:
+        key: /bookjeok/dev/KAKAO_REST_API_KEY
+      secretKey: KAKAO_REST_API_KEY
+    - remoteRef:
+        key: /bookjeok/common/JWT_SECRET
+      secretKey: JWT_SECRET
+    - remoteRef:
+        key: /bookjeok/common/TOSS_PAYMENTS_BASE_URL
+      secretKey: TOSS_PAYMENTS_BASE_URL
+    - remoteRef:
+        key: /bookjeok/common/TOSS_PAYMENTS_SECRET_KEY
+      secretKey: TOSS_PAYMENTS_SECRET_KEY
+    refreshInterval: 1h
+    secretStoreRef:
+      kind: SecretStore
+      name: aws-parameter-store
+    target:
+      creationPolicy: Owner
+      deletionPolicy: Retain
+      name: dev-backend-config
+autoscaling:
+  enabled: true
+  spec:
+    maxReplicas: 2
+    metrics:
+    - resource:
+        name: cpu
+        target:
+          averageUtilization: 70
+          type: Utilization
+      type: Resource
+    minReplicas: 1
+    scaleTargetRef:
+      apiVersion: apps/v1
+      kind: Deployment
+      name: dev-backend
