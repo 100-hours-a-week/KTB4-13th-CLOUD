@@ -4,7 +4,7 @@ labels:
   app.kubernetes.io/part-of: bookjeok
 selectorLabels:
   app.kubernetes.io/name: dev-backend
-replicaCount: 1
+replicaCount: 2
 strategy:
   rollingUpdate:
     maxSurge: 1
@@ -236,6 +236,7 @@ externalSecret:
       name: dev-backend-config
 autoscaling:
   enabled: true
+  explicitReplicaCount: true
   spec:
     maxReplicas: 2
     metrics:
