@@ -85,15 +85,18 @@ service:
   enabled: true
   labels: {}
   spec:
+    externalTrafficPolicy: Local
+    internalTrafficPolicy: Cluster
     ports:
     - name: http
+      nodePort: 31988
       port: 8000
       protocol: TCP
       targetPort: http
     selector:
       app.kubernetes.io/name: dev-ai
     sessionAffinity: None
-    type: ClusterIP
+    type: NodePort
 serviceAccount:
   create: true
   automountServiceAccountToken: false

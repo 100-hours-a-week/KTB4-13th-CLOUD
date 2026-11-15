@@ -20,6 +20,29 @@ podSpec:
   serviceAccount: dev-backend
   serviceAccountName: dev-backend
   terminationGracePeriodSeconds: 60
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+        - matchExpressions:
+          - key: eks.amazonaws.com/nodegroup
+            operator: In
+            values:
+            - bookjeok-dev-general-a
+            - bookjeok-dev-general-b
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+      - labelSelector:
+          matchLabels:
+            app.kubernetes.io/name: dev-backend
+        topologyKey: kubernetes.io/hostname
+  topologySpreadConstraints:
+  - labelSelector:
+      matchLabels:
+        app.kubernetes.io/name: dev-backend
+    maxSkew: 1
+    topologyKey: topology.kubernetes.io/zone
+    whenUnsatisfiable: ScheduleAnyway
 container:
   env:
   - name: SERVER_SHUTDOWN
@@ -81,7 +104,10 @@ container:
         key: TOSS_PAYMENTS_BASE_URL
         name: dev-backend-config
   - name: AI_BASE_URL
-    value: http://dev-ai.dev.svc.cluster.local:8000
+    valueFrom:
+      secretKeyRef:
+        key: AI_BASE_URL
+        name: dev-backend-config
   - name: DB_PASSWORD
     valueFrom:
       secretKeyRef:
@@ -125,10 +151,10 @@ container:
   resources:
     limits:
       cpu: 500m
-      memory: 500Mi
+      memory: 896Mi
     requests:
       cpu: 250m
-      memory: 500Mi
+      memory: 768Mi
   startupProbe:
     failureThreshold: 60
     httpGet:
@@ -147,6 +173,7 @@ service:
     app.kubernetes.io/part-of: bookjeok
   spec:
     externalTrafficPolicy: Cluster
+    internalTrafficPolicy: Cluster
     ports:
     - nodePort: 32719
       port: 8080
@@ -164,7 +191,7 @@ externalSecret:
   spec:
     data:
     - remoteRef:
-        key: /bookjeok/dev/AI_BASE_URL
+        key: /bookjeok/eks/dev/AI_BASE_URL
       secretKey: AI_BASE_URL
     - remoteRef:
         key: /bookjeok/common/AI_SERVICE_TOKEN
@@ -218,7 +245,7 @@ autoscaling:
           averageUtilization: 70
           type: Utilization
       type: Resource
-    minReplicas: 1
+    minReplicas: 2
     scaleTargetRef:
       apiVersion: apps/v1
       kind: Deployment
