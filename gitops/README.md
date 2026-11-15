@@ -10,11 +10,11 @@
 - `bootstrap/argocd`: Argo CD v3.6.1 공식 설치와 개발용 자원 설정
 - `argocd`: dev 전용 AppProject와 수동 동기화 Application 두 개
 
-실제 비밀번호·API 키·Kubernetes Secret은 포함하지 않습니다. ExternalSecret에는 AWS Parameter Store 경로만 기록합니다. EKS 백엔드는 `http://dev-ai.dev.svc.cluster.local:8000`을 사용하고, ECS와 공유하는 Parameter Store의 AI_BASE_URL은 변경하지 않습니다.
+실제 비밀번호·API 키·Kubernetes Secret은 포함하지 않습니다. ExternalSecret에는 AWS Parameter Store 경로만 기록합니다. EKS 백엔드는 `AI_BASE_URL`을 EKS 전용 Parameter Store 경로 `/bookjeok/eks/dev/AI_BASE_URL`에서 받습니다.
 
 ## 배포 소유권
 
-백엔드 HPA가 replicas를 관리합니다. Chart는 HPA를 사용할 때 Deployment replicas를 렌더링하지 않고, Application도 `/spec/replicas` 차이를 무시합니다. AI replicas는 Values로 관리합니다. 기존 Pod selector·Service 이름·NodePort·Probe·이미지 digest를 유지했습니다. 첫 인계 때 불필요한 재배포를 피하도록 기존 재시작 annotation도 보존했습니다.
+백엔드 HPA가 실행 중인 replicas를 관리하며, Application은 `/spec/replicas` 차이를 무시합니다. 개발 백엔드는 현재 HPA 범위가 2~2이므로 첫 인계 때 일시적으로 기본값인 1개로 축소되지 않도록 Chart에도 초기 복제본 2개를 명시합니다. AI replicas는 Values로 관리합니다. 기존 Pod selector·Service 이름·NodePort·Probe·이미지 digest를 유지했습니다. 첫 인계 때 불필요한 재배포를 피하도록 기존 재시작 annotation도 보존했습니다.
 
 첫 Application 연결은 수동 동기화입니다. 자동 동기화·prune·selfHeal은 켜지 않습니다. Application 삭제 시 앱 리소스를 자동 삭제하는 finalizer도 넣지 않았습니다. main에 이 구성이 반영된 뒤 Application을 연결합니다.
 
