@@ -6,7 +6,7 @@ metadata:
   labels:
     {{- toYaml .Values.labels | nindent 4 }}
 spec:
-  {{- if not .Values.autoscaling.enabled }}
+  {{- if or (not .Values.autoscaling.enabled) .Values.autoscaling.explicitReplicaCount }}
   replicas: {{ .Values.replicaCount }}
   {{- end }}
   selector:
