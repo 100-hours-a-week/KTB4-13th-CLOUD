@@ -1,0 +1,5 @@
+apiVersion: v2
+name: bookjeok-application
+description: Shared deployment chart for Bookjeok backend and CPU AI
+type: application
+version: 0.1.0

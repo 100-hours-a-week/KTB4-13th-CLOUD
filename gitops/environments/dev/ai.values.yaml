@@ -1,0 +1,168 @@
+name: dev-ai
+labels:
+  app.kubernetes.io/name: dev-ai
+selectorLabels:
+  app.kubernetes.io/name: dev-ai
+replicaCount: 1
+strategy:
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0
+  type: RollingUpdate
+podAnnotations: {}
+podSpec:
+  automountServiceAccountToken: false
+  dnsPolicy: ClusterFirst
+  nodeSelector:
+    workload: ai
+  restartPolicy: Always
+  schedulerName: default-scheduler
+  securityContext: {}
+  serviceAccount: dev-ai
+  serviceAccountName: dev-ai
+  terminationGracePeriodSeconds: 60
+  tolerations:
+  - effect: NoSchedule
+    key: workload
+    operator: Equal
+    value: ai
+container:
+  env:
+  - name: CHAT_NARROWING
+    value: 'true'
+  - name: RELEASE_SHA
+    value: 77fdd940e0966526ea7a071acc6e0b00318567a9
+  envFrom:
+  - secretRef:
+      name: dev-ai-config
+  image: 522688057030.dkr.ecr.ap-northeast-2.amazonaws.com/bookjeok-ai@sha256:158f1aae9a6d18e7d6f8726c7f6378d0d422a7ecbf114dbe7b8568bf20462a41
+  imagePullPolicy: IfNotPresent
+  lifecycle:
+    preStop:
+      exec:
+        command:
+        - sh
+        - -c
+        - sleep 10
+  livenessProbe:
+    failureThreshold: 3
+    periodSeconds: 20
+    successThreshold: 1
+    tcpSocket:
+      port: http
+    timeoutSeconds: 1
+  name: ai
+  ports:
+  - containerPort: 8000
+    name: http
+    protocol: TCP
+  readinessProbe:
+    failureThreshold: 3
+    httpGet:
+      path: /health
+      port: http
+      scheme: HTTP
+    periodSeconds: 10
+    successThreshold: 1
+    timeoutSeconds: 5
+  resources:
+    limits:
+      cpu: '2'
+      memory: 3Gi
+    requests:
+      cpu: 500m
+      memory: 2Gi
+  startupProbe:
+    failureThreshold: 120
+    periodSeconds: 5
+    successThreshold: 1
+    tcpSocket:
+      port: http
+    timeoutSeconds: 1
+  terminationMessagePath: /dev/termination-log
+  terminationMessagePolicy: File
+service:
+  enabled: true
+  labels: {}
+  spec:
+    externalTrafficPolicy: Local
+    internalTrafficPolicy: Cluster
+    ports:
+    - name: http
+      nodePort: 31988
+      port: 8000
+      protocol: TCP
+      targetPort: http
+    selector:
+      app.kubernetes.io/name: dev-ai
+    sessionAffinity: None
+    type: NodePort
+serviceAccount:
+  create: true
+  automountServiceAccountToken: false
+externalSecret:
+  enabled: true
+  spec:
+    data:
+    - remoteRef:
+        key: /bookjeok/common/AGENT_BOOK_INFO
+      secretKey: AGENT_BOOK_INFO
+    - remoteRef:
+        key: /bookjeok/common/AGENT_CHECKOUT
+      secretKey: AGENT_CHECKOUT
+    - remoteRef:
+        key: /bookjeok/common/AGENT_LLM_MODEL_ID
+      secretKey: AGENT_LLM_MODEL_ID
+    - remoteRef:
+        key: /bookjeok/common/AI_SERVICE_TOKEN
+      secretKey: AI_SERVICE_TOKEN
+    - remoteRef:
+        key: /bookjeok/dev/BE_PUBLIC_API_BASE_URL
+      secretKey: BE_PUBLIC_API_BASE_URL
+    - remoteRef:
+        key: /bookjeok/common/CHAT_JUDGE
+      secretKey: CHAT_JUDGE
+    - remoteRef:
+        key: /bookjeok/dev/ai/CURSOR_SIGNING_KEY
+      secretKey: CURSOR_SIGNING_KEY
+    - remoteRef:
+        key: /bookjeok/dev/ai/DATABASE_URL
+      secretKey: DATABASE_URL
+    - remoteRef:
+        key: /bookjeok/common/EXTERNAL_AI_API_KEY
+      secretKey: EXTERNAL_AI_API_KEY
+    - remoteRef:
+        key: /bookjeok/common/EXTRACTION_LLM_MODEL_ID
+      secretKey: EXTRACTION_LLM_MODEL_ID
+    - remoteRef:
+        key: /bookjeok/dev/EXTRACTION_SELF_HOSTED_BASE_URL
+      secretKey: EXTRACTION_SELF_HOSTED_BASE_URL
+    - remoteRef:
+        key: /bookjeok/dev/ai/LLM_BASE_URL
+      secretKey: LLM_BASE_URL
+    - remoteRef:
+        key: /bookjeok/dev/ai/LLM_MODEL_ID
+      secretKey: LLM_MODEL_ID
+    - remoteRef:
+        key: /bookjeok/dev/ai/LLM_PROVIDER
+      secretKey: LLM_PROVIDER
+    - remoteRef:
+        key: /bookjeok/dev/ai/PHOTO_IMAGE_URL_PREFIXES
+      secretKey: PHOTO_IMAGE_URL_PREFIXES
+    - remoteRef:
+        key: /bookjeok/dev/ai/PHOTO_LLM_MODEL_ID
+      secretKey: PHOTO_LLM_MODEL_ID
+    - remoteRef:
+        key: /bookjeok/common/RELATION_LLM_MODEL_ID
+      secretKey: RELATION_LLM_MODEL_ID
+    refreshInterval: 1h
+    secretStoreRef:
+      kind: SecretStore
+      name: aws-parameter-store
+    target:
+      creationPolicy: Owner
+      deletionPolicy: Retain
+      name: dev-ai-config
+autoscaling:
+  enabled: false
+  spec: {}

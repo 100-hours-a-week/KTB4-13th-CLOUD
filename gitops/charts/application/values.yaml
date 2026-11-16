@@ -1,0 +1,24 @@
+name: ''
+labels: {}
+selectorLabels: {}
+replicaCount: 1
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 0
+    maxSurge: 1
+podAnnotations: {}
+podSpec: {}
+container: {}
+service:
+  enabled: true
+  spec: {}
+serviceAccount:
+  create: true
+  automountServiceAccountToken: false
+externalSecret:
+  enabled: false
+  spec: {}
+autoscaling:
+  enabled: false
+  spec: {}

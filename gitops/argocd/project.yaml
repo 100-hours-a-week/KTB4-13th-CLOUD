@@ -1,0 +1,23 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: bookjeok-dev
+  namespace: argocd
+spec:
+  sourceRepos:
+  - https://github.com/100-hours-a-week/KTB4-13th-Cloud.git
+  destinations:
+  - namespace: dev
+    server: https://kubernetes.default.svc
+  clusterResourceWhitelist: []
+  namespaceResourceWhitelist:
+  - group: apps
+    kind: Deployment
+  - group: ''
+    kind: Service
+  - group: ''
+    kind: ServiceAccount
+  - group: external-secrets.io
+    kind: ExternalSecret
+  - group: autoscaling
+    kind: HorizontalPodAutoscaler

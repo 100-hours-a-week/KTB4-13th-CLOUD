@@ -1,0 +1,9 @@
+{{- if .Values.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ .Values.name }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  {{- toYaml .Values.autoscaling.spec | nindent 2 }}
+{{- end }}
